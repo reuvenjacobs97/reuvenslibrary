@@ -196,7 +196,9 @@ const DEFAULT_PIN = "1234";
 
 // Paste the Google Apps Script Web App URL here once you've deployed it.
 // Leave blank to skip sheet sync.
-const SHEET_SYNC_URL = "";
+const SHEET_SYNC_URL = "https://script.google.com/macros/s/AKfycby5MU2446IZyiUOWzA9skDgcjzG6akrWMXHXyRkj8qhbOZ_XeMtzwnFd6_92H4AX_RwOQ/exec";
+// Shared secret the Apps Script checks before writing anything.
+const SHEET_SYNC_SECRET = "b185c6609b7c91918e360168eb3de6b5";
 
 async function syncBookToSheet(book) {
   if (!SHEET_SYNC_URL) return;
@@ -206,6 +208,7 @@ async function syncBookToSheet(book) {
       mode: "no-cors",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
+        secret: SHEET_SYNC_SECRET,
         title: book.title,
         author: book.author,
         read: book.read,
@@ -344,41 +347,46 @@ export default function ReuvensLibrary() {
     return () => { cancelled = true; };
   }, []);
 
-  // ---------- Cover fetching (throttled batches) ----------
+  // ---------- Cover fetching (slow, retry-safe) ----------
   useEffect(() => {
     if (!books) return;
     const need = books.filter((b) => !b.cover && !b.coverTried);
     if (need.length === 0) return;
 
     let cancelled = false;
-    const BATCH = 4;
+    const DELAY_MS = 400;
 
     async function fetchCover(book) {
       try {
         const q = encodeURIComponent(`intitle:${book.title} inauthor:${book.author}`);
         const r = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${q}&maxResults=1`);
+        if (r.status === 429) {
+          return { cover: null, tried: false, rateLimited: true };
+        }
+        if (!r.ok) {
+          return { cover: null, tried: true, rateLimited: false };
+        }
         const data = await r.json();
         const img = data?.items?.[0]?.volumeInfo?.imageLinks?.thumbnail
           || data?.items?.[0]?.volumeInfo?.imageLinks?.smallThumbnail
           || null;
-        return img ? img.replace("http://", "https://") : null;
+        return { cover: img ? img.replace("http://", "https://") : null, tried: true, rateLimited: false };
       } catch {
-        return null;
+        return { cover: null, tried: false, rateLimited: false };
       }
     }
 
     (async () => {
       let current = books;
-      for (let i = 0; i < need.length; i += BATCH) {
+      for (const book of need) {
         if (cancelled) return;
-        const batch = need.slice(i, i + BATCH);
-        const results = await Promise.all(batch.map(fetchCover));
-        current = current.map((b) => {
-          const idx = batch.findIndex((x) => x.id === b.id);
-          if (idx === -1) return b;
-          return { ...b, cover: results[idx], coverTried: true };
-        });
+        const result = await fetchCover(book);
+        current = current.map((b) =>
+          b.id === book.id ? { ...b, cover: result.cover, coverTried: result.tried } : b
+        );
         if (!cancelled) setBooks(current);
+        if (result.rateLimited) break;
+        await new Promise((resolve) => setTimeout(resolve, DELAY_MS));
       }
       if (!cancelled) {
         try {
