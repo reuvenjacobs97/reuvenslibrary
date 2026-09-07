@@ -294,13 +294,13 @@ export default function ReuvensLibrary() {
         let booksData;
         try {
           const res = await storage.get("books");
-          booksData = res ? JSON.parse(res.value) : null;
+          booksData = res ? res.value : null;
         } catch {
           booksData = null;
         }
         if (!booksData) {
           booksData = SEED_BOOKS;
-          await storage.set("books", JSON.stringify(booksData));
+          await storage.set("books", booksData);
         } else {
           const existingKeys = new Set(
             booksData.map((b) => `${b.title}|${b.author}`.toLowerCase())
@@ -310,14 +310,14 @@ export default function ReuvensLibrary() {
           );
           if (missing.length > 0) {
             booksData = [...booksData, ...missing];
-            await storage.set("books", JSON.stringify(booksData));
+            await storage.set("books", booksData);
           }
         }
 
         let pin = DEFAULT_PIN;
         try {
           const res = await storage.get("owner-pin");
-          pin = res ? res.value : DEFAULT_PIN;
+          pin = res ? String(res.value) : DEFAULT_PIN;
         } catch {
           await storage.set("owner-pin", DEFAULT_PIN);
         }
@@ -325,7 +325,7 @@ export default function ReuvensLibrary() {
         let reqs = [];
         try {
           const res = await storage.get("requests");
-          reqs = res ? JSON.parse(res.value) : [];
+          reqs = res ? res.value : [];
         } catch {
           reqs = [];
         }
@@ -390,7 +390,7 @@ export default function ReuvensLibrary() {
       }
       if (!cancelled) {
         try {
-          await storage.set("books", JSON.stringify(current));
+          await storage.set("books", current);
         } catch {}
       }
     })();
@@ -402,7 +402,7 @@ export default function ReuvensLibrary() {
   const saveBooks = useCallback(async (next) => {
     setBooks(next);
     try {
-      await storage.set("books", JSON.stringify(next));
+      await storage.set("books", next);
     } catch {
       showToast("Couldn't save — check your connection.");
     }
@@ -411,7 +411,7 @@ export default function ReuvensLibrary() {
   const saveRequests = useCallback(async (next) => {
     setRequests(next);
     try {
-      await storage.set("requests", JSON.stringify(next));
+      await storage.set("requests", next);
     } catch {
       showToast("Couldn't save the request.");
     }
@@ -419,7 +419,7 @@ export default function ReuvensLibrary() {
 
   // ---------- Owner unlock ----------
   function tryUnlock() {
-    if (pinInput === ownerPin) {
+    if (String(pinInput).trim() === String(ownerPin).trim()) {
       setOwnerUnlocked(true);
       setShowPinModal(false);
       setPinInput("");
