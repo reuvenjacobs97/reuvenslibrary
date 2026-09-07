@@ -200,6 +200,10 @@ const SHEET_SYNC_URL = "https://script.google.com/macros/s/AKfycby5MU2446IZyiUOW
 // Shared secret the Apps Script checks before writing anything.
 const SHEET_SYNC_SECRET = "b185c6609b7c91918e360168eb3de6b5";
 
+// Set NEXT_PUBLIC_GOOGLE_BOOKS_API_KEY in Vercel's Environment Variables
+// to raise the cover-lookup quota well above the anonymous limit.
+const GOOGLE_BOOKS_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_BOOKS_API_KEY || "";
+
 async function syncBookToSheet(book) {
   if (!SHEET_SYNC_URL) return;
   try {
@@ -359,7 +363,9 @@ export default function ReuvensLibrary() {
     async function fetchCover(book) {
       try {
         const q = encodeURIComponent(`intitle:${book.title} inauthor:${book.author}`);
-        const r = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${q}&maxResults=1`);
+        const r = await fetch(
+          `https://www.googleapis.com/books/v1/volumes?q=${q}&maxResults=1${GOOGLE_BOOKS_API_KEY ? `&key=${GOOGLE_BOOKS_API_KEY}` : ""}`
+        );
         if (r.status === 429) {
           return { cover: null, tried: false, rateLimited: true };
         }
