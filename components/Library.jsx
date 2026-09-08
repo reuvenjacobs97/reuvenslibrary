@@ -318,6 +318,10 @@ export default function ReuvensLibrary() {
           }
         }
 
+        // One-time reset: retry any book still missing a cover with the
+        // improved multi-result matching, instead of leaving it stuck.
+        booksData = booksData.map((b) => (!b.cover ? { ...b, coverTried: false } : b));
+
         let pin = DEFAULT_PIN;
         try {
           const res = await storage.get("owner-pin");
@@ -364,7 +368,7 @@ export default function ReuvensLibrary() {
       try {
         const q = encodeURIComponent(`intitle:${book.title} inauthor:${book.author}`);
         const r = await fetch(
-          `https://www.googleapis.com/books/v1/volumes?q=${q}&maxResults=1${GOOGLE_BOOKS_API_KEY ? `&key=${GOOGLE_BOOKS_API_KEY}` : ""}`
+          `https://www.googleapis.com/books/v1/volumes?q=${q}&maxResults=5${GOOGLE_BOOKS_API_KEY ? `&key=${GOOGLE_BOOKS_API_KEY}` : ""}`
         );
         if (r.status === 429) {
           return { cover: null, tried: false, rateLimited: true };
@@ -373,9 +377,15 @@ export default function ReuvensLibrary() {
           return { cover: null, tried: true, rateLimited: false };
         }
         const data = await r.json();
-        const img = data?.items?.[0]?.volumeInfo?.imageLinks?.thumbnail
-          || data?.items?.[0]?.volumeInfo?.imageLinks?.smallThumbnail
-          || null;
+        const items = data?.items || [];
+        let img = null;
+        for (const item of items) {
+          const links = item?.volumeInfo?.imageLinks;
+          if (links?.thumbnail || links?.smallThumbnail) {
+            img = links.thumbnail || links.smallThumbnail;
+            break;
+          }
+        }
         return { cover: img ? img.replace("http://", "https://") : null, tried: true, rateLimited: false };
       } catch {
         return { cover: null, tried: false, rateLimited: false };
