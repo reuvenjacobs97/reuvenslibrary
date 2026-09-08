@@ -713,6 +713,7 @@ export default function ReuvensLibrary() {
 
 function BookCard({ book, onClick }) {
   const hue = hueFromString(keyFor(book));
+  const onLoan = book.shelf === "On Loan";
   return (
     <button style={styles.card} onClick={onClick}>
       <div style={styles.coverWrap}>
@@ -723,10 +724,11 @@ function BookCard({ book, onClick }) {
             {initials(book.title)}
           </div>
         )}
+        {onLoan && <div style={styles.loanBanner}>On Loan</div>}
         <span
           style={{
             ...styles.statusDot,
-            background: book.shelf === "On Shelf" ? PALETTE.onShelf : PALETTE.onLoan,
+            background: onLoan ? PALETTE.onLoan : PALETTE.onShelf,
           }}
         />
       </div>
@@ -989,6 +991,23 @@ const styles = {
     fontSize: 24,
   },
   statusDot: { position: "absolute", top: 6, right: 6, width: 8, height: 8, borderRadius: "50%", boxShadow: "0 0 0 2px rgba(0,0,0,0.5)" },
+  loanBanner: {
+    position: "absolute",
+    top: "44%",
+    left: "-10%",
+    width: "120%",
+    textAlign: "center",
+    background: "rgba(193, 122, 69, 0.94)",
+    color: "#fff",
+    fontFamily: "'Inter', sans-serif",
+    fontSize: 10.5,
+    fontWeight: 700,
+    letterSpacing: "0.6px",
+    textTransform: "uppercase",
+    padding: "3px 0",
+    transform: "rotate(-8deg)",
+    boxShadow: "0 2px 6px rgba(0,0,0,0.45)",
+  },
   cardTitle: { fontSize: 12.5, marginTop: 8, lineHeight: 1.3 },
   cardSeries: { fontSize: 11, color: PALETTE.creamDim, marginTop: 2 },
   overlayBg: {
