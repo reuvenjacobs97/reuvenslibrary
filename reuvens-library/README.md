@@ -1,0 +1,70 @@
+# Reuven's Library
+
+A personal book library web app: browse by author, request to borrow a book,
+and (as the owner) manage statuses from a PIN-gated edit mode.
+
+## What you need before deploying
+
+- A free [GitHub](https://github.com) account (to hold the code Vercel deploys from)
+- A free [Vercel](https://vercel.com) account (you can sign up with GitHub directly)
+- A free [Upstash](https://upstash.com) account (for the database) — you can also
+  add this straight from the Vercel dashboard, see step 3 below
+
+No custom domain needed — Vercel gives you a free `your-project-name.vercel.app` URL.
+
+## Deploy steps
+
+### 1. Push this project to GitHub
+From this folder:
+```bash
+git init
+git add .
+git commit -m "Initial commit"
+```
+Then create a new empty repository on GitHub and follow its instructions to push
+(`git remote add origin ...`, `git push -u origin main`).
+
+### 2. Import the project into Vercel
+- Go to [vercel.com/new](https://vercel.com/new)
+- Select the GitHub repo you just pushed
+- Leave all settings as default (Vercel auto-detects Next.js) and click **Deploy**
+- The first deploy will fail — that's expected, since there's no database connected yet. That's fine, move to step 3.
+
+### 3. Add the database (Upstash Redis)
+- In your new Vercel project, go to the **Storage** tab
+- Click **Create Database** → choose **Upstash** → **Redis**
+- Follow the prompts to create a free database and connect it to this project
+- This automatically sets the `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`
+  environment variables for you — no manual copying needed
+
+### 4. Redeploy
+- Go to the **Deployments** tab and click **Redeploy** on the latest deployment
+  (or just push any small change to GitHub — Vercel redeploys automatically)
+- Once it finishes, open the `.vercel.app` link — your library should load
+
+## Using the app
+
+- **Default owner PIN is `1234`.** Unlock editing with the lock icon, then open
+  settings (the icon again once unlocked) to change it to something only you know.
+- **Book covers** load automatically from the Google Books API on first visit.
+  A few obscure titles may not find a match and will show an initials tile instead.
+- **Requests**: anyone can tap "Request to borrow" and enter their name. It's saved
+  immediately to the Requests panel, and they also get a button to optionally open
+  an email to you about it.
+- Everything is stored in your Upstash database, shared across everyone who opens
+  the link — there's no per-user login.
+
+## Local development (optional)
+
+```bash
+npm install
+cp .env.example .env.local   # then paste in your Upstash REST URL + token
+npm run dev
+```
+
+## A note on the PIN
+
+The owner PIN is a soft lock, not real security — it protects against casual
+guests changing statuses by accident, not a determined person reading the
+network requests. Fine for sharing with friends/family; don't rely on it for
+anything sensitive.
