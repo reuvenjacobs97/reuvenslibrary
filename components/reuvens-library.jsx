@@ -1,7 +1,4 @@
-"use client";
-
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { storage } from "../lib/storage";
 import { Search, Lock, Unlock, Bell, X, Check, Ban, BookOpen, Settings, Mail } from "lucide-react";
 
 // ---------- Seed data (from the owner's existing spreadsheet) ----------
@@ -194,15 +191,14 @@ const SEED_BOOKS = [
 const OWNER_EMAIL = "reuvenjacobs97@gmail.com";
 const DEFAULT_PIN = "1234";
 
-// Paste the Google Apps Script Web App URL here once you've deployed it.
-// Leave blank to skip sheet sync.
+// Paste the Google Apps Script Web App URL here once you've deployed it
+// (see the setup steps the owner was given). Leave blank to skip sheet sync.
 const SHEET_SYNC_URL = "https://script.google.com/macros/s/AKfycby5MU2446IZyiUOWzA9skDgcjzG6akrWMXHXyRkj8qhbOZ_XeMtzwnFd6_92H4AX_RwOQ/exec";
-// Shared secret the Apps Script checks before writing anything.
+// Shared secret the Apps Script checks before writing anything — keeps
+// the endpoint from accepting requests from anyone who finds the URL.
 const SHEET_SYNC_SECRET = "b185c6609b7c91918e360168eb3de6b5";
 
-// Set NEXT_PUBLIC_GOOGLE_BOOKS_API_KEY in Vercel's Environment Variables
-// to raise the cover-lookup quota well above the anonymous limit.
-const GOOGLE_BOOKS_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_BOOKS_API_KEY || "";
+const GOOGLE_BOOKS_API_KEY = "AIzaSyCo3WE5_rzj3R0y3ELanxuohY0Sn3Jf_Lg";
 
 async function syncBookToSheet(book) {
   if (!SHEET_SYNC_URL) return;
@@ -281,6 +277,21 @@ export default function ReuvensLibrary() {
   const [requestMode, setRequestMode] = useState(false);
   const [sentInfo, setSentInfo] = useState(null);
 
+  const [showAddBook, setShowAddBook] = useState(false);
+  const [addQuery, setAddQuery] = useState("");
+  const [addResults, setAddResults] = useState([]);
+  const [addSearching, setAddSearching] = useState(false);
+  const [addSelected, setAddSelected] = useState(null);
+  const [addDraft, setAddDraft] = useState({
+    seriesName: "",
+    seriesType: "Stand Alone",
+    bookNum: "",
+    read: "Not Read",
+    shelf: "On Shelf",
+    borrower: "",
+    notes: "",
+  });
+
   const [toast, setToast] = useState(null);
   const toastTimer = useRef(null);
 
@@ -297,14 +308,14 @@ export default function ReuvensLibrary() {
       try {
         let booksData;
         try {
-          const res = await storage.get("books");
-          booksData = res ? res.value : null;
+          const res = await window.storage.get("books", true);
+          booksData = res ? JSON.parse(res.value) : null;
         } catch {
           booksData = null;
         }
         if (!booksData) {
           booksData = SEED_BOOKS;
-          await storage.set("books", booksData);
+          await window.storage.set("books", JSON.stringify(booksData), true);
         } else {
           const existingKeys = new Set(
             booksData.map((b) => `${b.title}|${b.author}`.toLowerCase())
@@ -314,7 +325,7 @@ export default function ReuvensLibrary() {
           );
           if (missing.length > 0) {
             booksData = [...booksData, ...missing];
-            await storage.set("books", booksData);
+            await window.storage.set("books", JSON.stringify(booksData), true);
           }
         }
 
@@ -324,16 +335,16 @@ export default function ReuvensLibrary() {
 
         let pin = DEFAULT_PIN;
         try {
-          const res = await storage.get("owner-pin");
-          pin = res ? String(res.value) : DEFAULT_PIN;
+          const res = await window.storage.get("owner-pin", true);
+          pin = res ? res.value : DEFAULT_PIN;
         } catch {
-          await storage.set("owner-pin", DEFAULT_PIN);
+          await window.storage.set("owner-pin", DEFAULT_PIN, true);
         }
 
         let reqs = [];
         try {
-          const res = await storage.get("requests");
-          reqs = res ? res.value : [];
+          const res = await window.storage.get("requests", true);
+          reqs = res ? JSON.parse(res.value) : [];
         } catch {
           reqs = [];
         }
@@ -366,28 +377,26 @@ export default function ReuvensLibrary() {
 
     async function fetchCover(book) {
       try {
-        const q = encodeURIComponent(`intitle:${book.title} inauthor:${book.author}`);
-        const r = await fetch(
-          `https://www.googleapis.com/books/v1/volumes?q=${q}&maxResults=5${GOOGLE_BOOKS_API_KEY ? `&key=${GOOGLE_BOOKS_API_KEY}` : ""}`
-        );
+        const params = new URLSearchParams({
+          title: book.title,
+          author: book.author,
+          limit: "5",
+          fields: "cover_i",
+        });
+        const r = await fetch(`https://openlibrary.org/search.json?${params.toString()}`);
         if (r.status === 429) {
+          // Rate limited — leave untried so it's retried on a future load.
           return { cover: null, tried: false, rateLimited: true };
         }
         if (!r.ok) {
           return { cover: null, tried: true, rateLimited: false };
         }
         const data = await r.json();
-        const items = data?.items || [];
-        let img = null;
-        for (const item of items) {
-          const links = item?.volumeInfo?.imageLinks;
-          if (links?.thumbnail || links?.smallThumbnail) {
-            img = links.thumbnail || links.smallThumbnail;
-            break;
-          }
-        }
-        return { cover: img ? img.replace("http://", "https://") : null, tried: true, rateLimited: false };
+        const docs = data?.docs || [];
+        const withCover = docs.find((d) => d.cover_i);
+        return { cover: withCover ? `https://covers.openlibrary.org/b/id/${withCover.cover_i}-M.jpg` : null, tried: true, rateLimited: false };
       } catch {
+        // Network error — leave untried so it's retried later.
         return { cover: null, tried: false, rateLimited: false };
       }
     }
@@ -401,12 +410,12 @@ export default function ReuvensLibrary() {
           b.id === book.id ? { ...b, cover: result.cover, coverTried: result.tried } : b
         );
         if (!cancelled) setBooks(current);
-        if (result.rateLimited) break;
+        if (result.rateLimited) break; // stop this session; pick up the rest next load
         await new Promise((resolve) => setTimeout(resolve, DELAY_MS));
       }
       if (!cancelled) {
         try {
-          await storage.set("books", current);
+          await window.storage.set("books", JSON.stringify(current), true);
         } catch {}
       }
     })();
@@ -418,7 +427,7 @@ export default function ReuvensLibrary() {
   const saveBooks = useCallback(async (next) => {
     setBooks(next);
     try {
-      await storage.set("books", next);
+      await window.storage.set("books", JSON.stringify(next), true);
     } catch {
       showToast("Couldn't save — check your connection.");
     }
@@ -427,7 +436,7 @@ export default function ReuvensLibrary() {
   const saveRequests = useCallback(async (next) => {
     setRequests(next);
     try {
-      await storage.set("requests", next);
+      await window.storage.set("requests", JSON.stringify(next), true);
     } catch {
       showToast("Couldn't save the request.");
     }
@@ -435,7 +444,7 @@ export default function ReuvensLibrary() {
 
   // ---------- Owner unlock ----------
   function tryUnlock() {
-    if (String(pinInput).trim() === String(ownerPin).trim()) {
+    if (pinInput === ownerPin) {
       setOwnerUnlocked(true);
       setShowPinModal(false);
       setPinInput("");
@@ -452,7 +461,7 @@ export default function ReuvensLibrary() {
       return;
     }
     try {
-      await storage.set("owner-pin", newPin.trim());
+      await window.storage.set("owner-pin", newPin.trim(), true);
       setOwnerPin(newPin.trim());
       setNewPin("");
       showToast("PIN updated.");
@@ -468,6 +477,82 @@ export default function ReuvensLibrary() {
     if (selectedBook?.id === id) setSelectedBook({ ...selectedBook, ...patch });
     const updated = next.find((b) => b.id === id);
     if (updated) syncBookToSheet(updated);
+    showToast("Saved.");
+  }
+
+  // ---------- Add a new book ----------
+  async function searchGoogleBooks() {
+    const q = addQuery.trim();
+    if (!q) return;
+    setAddSearching(true);
+    try {
+      const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=8${GOOGLE_BOOKS_API_KEY ? `&key=${GOOGLE_BOOKS_API_KEY}` : ""}`;
+      const r = await fetch(url);
+      const data = await r.json();
+      setAddResults(data.items || []);
+    } catch {
+      showToast("Search failed — check your connection.");
+      setAddResults([]);
+    }
+    setAddSearching(false);
+  }
+
+  function selectAddResult(item) {
+    const info = item.volumeInfo || {};
+    const cover =
+      info.imageLinks?.thumbnail?.replace("http://", "https://") ||
+      info.imageLinks?.smallThumbnail?.replace("http://", "https://") ||
+      null;
+    setAddSelected({
+      title: info.title || "",
+      author: (info.authors && info.authors.join(", ")) || "",
+      cover,
+    });
+  }
+
+  function editAddSelected(patch) {
+    setAddSelected((s) => ({ ...s, ...patch }));
+  }
+
+  function resetAddBook() {
+    setShowAddBook(false);
+    setAddQuery("");
+    setAddResults([]);
+    setAddSelected(null);
+    setAddDraft({
+      seriesName: "",
+      seriesType: "Stand Alone",
+      bookNum: "",
+      read: "Not Read",
+      shelf: "On Shelf",
+      borrower: "",
+      notes: "",
+    });
+  }
+
+  async function confirmAddBook() {
+    if (!addSelected || !addSelected.title.trim() || !addSelected.author.trim()) {
+      showToast("Title and author are required.");
+      return;
+    }
+    const newBook = {
+      id: `custom-${Date.now()}`,
+      title: addSelected.title.trim(),
+      seriesName: addDraft.seriesName.trim(),
+      author: addSelected.author.trim(),
+      seriesType: addDraft.seriesType,
+      bookNum: addDraft.bookNum,
+      read: addDraft.read,
+      shelf: addDraft.shelf,
+      borrower: addDraft.shelf === "On Shelf" ? "" : addDraft.borrower,
+      rating: "",
+      notes: addDraft.notes,
+      cover: addSelected.cover,
+      coverTried: true,
+    };
+    await saveBooks([...books, newBook]);
+    resetAddBook();
+    showToast("Book added.");
   }
 
   // ---------- Requests ----------
@@ -558,6 +643,11 @@ export default function ReuvensLibrary() {
           <p style={styles.subtitle}>{books.length} books on the shelf</p>
         </div>
         <div style={styles.headerActions}>
+          {ownerUnlocked && (
+            <button style={styles.addBookBtn} onClick={() => setShowAddBook(true)}>
+              + Add Book
+            </button>
+          )}
           <button
             style={styles.iconBtn}
             title={ownerUnlocked ? "Editing unlocked" : "Unlock editing"}
@@ -716,6 +806,25 @@ export default function ReuvensLibrary() {
         </Overlay>
       )}
 
+      {showAddBook && (
+        <AddBookModal
+          query={addQuery}
+          setQuery={setAddQuery}
+          onSearch={searchGoogleBooks}
+          searching={addSearching}
+          results={addResults}
+          selected={addSelected}
+          onSelect={selectAddResult}
+          onManual={() => setAddSelected({ title: addQuery, author: "", cover: null })}
+          onEdit={editAddSelected}
+          draft={addDraft}
+          setDraft={setAddDraft}
+          onConfirm={confirmAddBook}
+          onBackToSearch={() => setAddSelected(null)}
+          onClose={resetAddBook}
+        />
+      )}
+
       {toast && <div style={styles.toast}>{toast}</div>}
     </div>
   );
@@ -750,6 +859,23 @@ function BookCard({ book, onClick }) {
 
 function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequesterName, sentInfo, onRequestStart, onRequestCancel, onRequestSubmit, onUpdate, onClose }) {
   const hue = hueFromString(keyFor(book));
+  const [draft, setDraft] = useState({
+    read: book.read,
+    shelf: book.shelf,
+    borrower: book.borrower,
+    notes: book.notes,
+  });
+
+  useEffect(() => {
+    setDraft({ read: book.read, shelf: book.shelf, borrower: book.borrower, notes: book.notes });
+  }, [book.id]);
+
+  function commitUpdate() {
+    const patch = { ...draft };
+    if (patch.shelf === "On Shelf") patch.borrower = "";
+    onUpdate(patch);
+  }
+
   return (
     <Overlay onClose={onClose}>
       <div style={styles.detailTop}>
@@ -783,30 +909,39 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
       {ownerUnlocked ? (
         <div style={styles.editGrid}>
           <label style={styles.fieldLabel}>Read status</label>
-          <select style={styles.select} value={book.read} onChange={(e) => onUpdate({ read: e.target.value })}>
+          <select style={styles.select} value={draft.read} onChange={(e) => setDraft((d) => ({ ...d, read: e.target.value }))}>
             <option>Read</option>
             <option>Not Read</option>
           </select>
           <label style={styles.fieldLabel}>Shelf status</label>
           <select
             style={styles.select}
-            value={book.shelf}
+            value={draft.shelf}
             onChange={(e) => {
               const val = e.target.value;
-              onUpdate(val === "On Shelf" ? { shelf: val, borrower: "" } : { shelf: val });
+              setDraft((d) => ({ ...d, shelf: val, borrower: val === "On Shelf" ? "" : d.borrower }));
             }}
           >
             <option>On Shelf</option>
             <option>On Loan</option>
           </select>
-          {book.shelf === "On Loan" && (
+          {draft.shelf === "On Loan" && (
             <>
               <label style={styles.fieldLabel}>Borrower</label>
-              <input style={styles.select} value={book.borrower} onChange={(e) => onUpdate({ borrower: e.target.value })} />
+              <input
+                style={styles.select}
+                value={draft.borrower}
+                onChange={(e) => setDraft((d) => ({ ...d, borrower: e.target.value }))}
+              />
             </>
           )}
           <label style={styles.fieldLabel}>Notes</label>
-          <textarea style={{ ...styles.select, minHeight: 60 }} value={book.notes} onChange={(e) => onUpdate({ notes: e.target.value })} />
+          <textarea
+            style={{ ...styles.select, minHeight: 60 }}
+            value={draft.notes}
+            onChange={(e) => setDraft((d) => ({ ...d, notes: e.target.value }))}
+          />
+          <button style={{ ...styles.primaryBtn, marginTop: 10 }} onClick={commitUpdate}>Update</button>
         </div>
       ) : (
         <>
@@ -844,6 +979,153 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
             <p style={styles.modalTextDim}>Currently on loan{book.borrower ? ` to ${book.borrower}` : ""}.</p>
           )}
           {book.notes && <p style={styles.modalTextDim}>{book.notes}</p>}
+        </>
+      )}
+    </Overlay>
+  );
+}
+
+function AddBookModal({ query, setQuery, onSearch, searching, results, selected, onSelect, onManual, onEdit, draft, setDraft, onConfirm, onBackToSearch, onClose }) {
+  return (
+    <Overlay onClose={onClose} wide>
+      <h3 style={styles.modalTitle}>Add a book</h3>
+
+      {!selected ? (
+        <>
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <input
+              style={styles.select}
+              autoFocus
+              placeholder="Search by title or author…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && onSearch()}
+            />
+            <button style={styles.primaryBtn} onClick={onSearch} disabled={searching}>
+              {searching ? "…" : "Search"}
+            </button>
+          </div>
+
+          <div style={styles.addResultsList}>
+            {results.map((item, i) => {
+              const info = item.volumeInfo || {};
+              const thumb = info.imageLinks?.smallThumbnail?.replace("http://", "https://");
+              return (
+                <button key={item.id || i} style={styles.addResultRow} onClick={() => onSelect(item)}>
+                  {thumb ? (
+                    <img src={thumb} alt="" style={styles.addResultThumb} />
+                  ) : (
+                    <div style={{ ...styles.addResultThumb, ...styles.addResultThumbBlank }}>{initials(info.title || "?")}</div>
+                  )}
+                  <div>
+                    <div style={styles.reqTitle}>{info.title}</div>
+                    <div style={styles.reqMeta}>
+                      {(info.authors && info.authors.join(", ")) || "Unknown author"}
+                      {info.publishedDate ? ` · ${info.publishedDate.slice(0, 4)}` : ""}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {query.trim() && (
+            <button style={styles.textBtn} onClick={onManual}>
+              Can't find it? Add "{query.trim()}" manually
+            </button>
+          )}
+        </>
+      ) : (
+        <>
+          <div style={styles.detailTop}>
+            <div style={styles.detailCoverWrap}>
+              {selected.cover ? (
+                <img src={selected.cover} alt="" style={styles.detailCoverImg} />
+              ) : (
+                <div style={{ ...styles.detailCoverPlaceholder, background: PALETTE.panel, color: PALETTE.creamDim }}>
+                  {initials(selected.title || "?")}
+                </div>
+              )}
+            </div>
+            <div>
+              <input
+                style={{ ...styles.select, marginBottom: 6 }}
+                value={selected.title}
+                placeholder="Title"
+                onChange={(e) => onEdit({ title: e.target.value })}
+              />
+              <div style={styles.modalTextDim}>{selected.author || "No author set"}</div>
+            </div>
+          </div>
+
+          <div style={styles.editGrid}>
+            <label style={styles.fieldLabel}>Author</label>
+            <input
+              style={styles.select}
+              value={selected.author}
+              onChange={(e) => onEdit({ author: e.target.value })}
+              placeholder="Author name"
+            />
+            <label style={styles.fieldLabel}>Series name (optional)</label>
+            <input
+              style={styles.select}
+              value={draft.seriesName}
+              onChange={(e) => setDraft((d) => ({ ...d, seriesName: e.target.value }))}
+            />
+            <label style={styles.fieldLabel}>Type</label>
+            <select style={styles.select} value={draft.seriesType} onChange={(e) => setDraft((d) => ({ ...d, seriesType: e.target.value }))}>
+              <option>Stand Alone</option>
+              <option>Series</option>
+              <option>Prequel/Novella</option>
+            </select>
+            {draft.seriesType !== "Stand Alone" && (
+              <>
+                <label style={styles.fieldLabel}>Book #</label>
+                <input
+                  style={styles.select}
+                  value={draft.bookNum}
+                  onChange={(e) => setDraft((d) => ({ ...d, bookNum: e.target.value }))}
+                />
+              </>
+            )}
+            <label style={styles.fieldLabel}>Read status</label>
+            <select style={styles.select} value={draft.read} onChange={(e) => setDraft((d) => ({ ...d, read: e.target.value }))}>
+              <option>Read</option>
+              <option>Not Read</option>
+            </select>
+            <label style={styles.fieldLabel}>Shelf status</label>
+            <select
+              style={styles.select}
+              value={draft.shelf}
+              onChange={(e) => {
+                const val = e.target.value;
+                setDraft((d) => ({ ...d, shelf: val, borrower: val === "On Shelf" ? "" : d.borrower }));
+              }}
+            >
+              <option>On Shelf</option>
+              <option>On Loan</option>
+            </select>
+            {draft.shelf === "On Loan" && (
+              <>
+                <label style={styles.fieldLabel}>Borrower</label>
+                <input
+                  style={styles.select}
+                  value={draft.borrower}
+                  onChange={(e) => setDraft((d) => ({ ...d, borrower: e.target.value }))}
+                />
+              </>
+            )}
+            <label style={styles.fieldLabel}>Notes</label>
+            <textarea
+              style={{ ...styles.select, minHeight: 50 }}
+              value={draft.notes}
+              onChange={(e) => setDraft((d) => ({ ...d, notes: e.target.value }))}
+            />
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <button style={styles.primaryBtn} onClick={onConfirm}>Add to library</button>
+              <button style={styles.textBtn} onClick={onBackToSearch}>Back to search</button>
+            </div>
+          </div>
         </>
       )}
     </Overlay>
@@ -888,7 +1170,47 @@ const styles = {
     letterSpacing: "0.2px",
   },
   subtitle: { margin: "4px 0 0", color: PALETTE.creamDim, fontSize: 13 },
-  headerActions: { display: "flex", gap: 8 },
+  headerActions: { display: "flex", gap: 8, alignItems: "center" },
+  addBookBtn: {
+    background: "transparent",
+    border: `1px solid ${PALETTE.brassDim}`,
+    color: PALETTE.brass,
+    borderRadius: 8,
+    padding: "8px 14px",
+    fontSize: 12.5,
+    fontWeight: 600,
+    cursor: "pointer",
+  },
+  addResultsList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+    marginTop: 12,
+    maxHeight: 300,
+    overflowY: "auto",
+  },
+  addResultRow: {
+    display: "flex",
+    gap: 10,
+    alignItems: "center",
+    background: PALETTE.panel,
+    border: `1px solid ${PALETTE.hairline}`,
+    borderRadius: 8,
+    padding: "8px 10px",
+    cursor: "pointer",
+    textAlign: "left",
+    color: PALETTE.cream,
+  },
+  addResultThumb: { width: 32, height: 46, objectFit: "cover", borderRadius: 3, flexShrink: 0 },
+  addResultThumbBlank: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    background: PALETTE.panelRaised,
+    color: PALETTE.creamDim,
+    fontSize: 11,
+    fontFamily: "'Source Serif 4', serif",
+  },
   iconBtn: {
     position: "relative",
     background: PALETTE.panel,
