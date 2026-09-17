@@ -215,9 +215,13 @@ async function syncBookToSheet(book) {
         secret: SHEET_SYNC_SECRET,
         title: book.title,
         author: book.author,
+        seriesName: book.seriesName,
+        seriesType: book.seriesType,
+        bookNum: book.bookNum,
         read: book.read,
         shelf: book.shelf,
         borrower: book.borrower,
+        notes: book.notes,
       }),
     });
   } catch {
@@ -285,6 +289,7 @@ export default function ReuvensLibrary() {
   const [addQuery, setAddQuery] = useState("");
   const [addResults, setAddResults] = useState([]);
   const [addSearching, setAddSearching] = useState(false);
+  const [addSearchError, setAddSearchError] = useState("");
   const [addSelected, setAddSelected] = useState(null);
   const [addDraft, setAddDraft] = useState({
     seriesName: "",
@@ -491,14 +496,22 @@ export default function ReuvensLibrary() {
     const q = addQuery.trim();
     if (!q) return;
     setAddSearching(true);
+    setAddSearchError("");
     try {
       const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=8${GOOGLE_BOOKS_API_KEY ? `&key=${GOOGLE_BOOKS_API_KEY}` : ""}`;
       const r = await fetch(url);
       const data = await r.json();
-      setAddResults(data.items || []);
+      if (!r.ok) {
+        setAddResults([]);
+        setAddSearchError(data?.error?.message || `Search failed (${r.status}).`);
+      } else {
+        const items = data.items || [];
+        setAddResults(items);
+        if (items.length === 0) setAddSearchError(`No results for "${q}".`);
+      }
     } catch {
-      showToast("Search failed — check your connection.");
       setAddResults([]);
+      setAddSearchError("Search failed — check your connection.");
     }
     setAddSearching(false);
   }
@@ -524,6 +537,7 @@ export default function ReuvensLibrary() {
     setShowAddBook(false);
     setAddQuery("");
     setAddResults([]);
+    setAddSearchError("");
     setAddSelected(null);
     setAddDraft({
       seriesName: "",
@@ -557,6 +571,7 @@ export default function ReuvensLibrary() {
       coverTried: true,
     };
     await saveBooks([...books, newBook]);
+    syncBookToSheet(newBook);
     resetAddBook();
     showToast("Book added.");
   }
@@ -818,6 +833,7 @@ export default function ReuvensLibrary() {
           setQuery={setAddQuery}
           onSearch={searchGoogleBooks}
           searching={addSearching}
+          searchError={addSearchError}
           results={addResults}
           selected={addSelected}
           onSelect={selectAddResult}
@@ -849,7 +865,12 @@ function BookCard({ book, onClick }) {
             {initials(book.title)}
           </div>
         )}
-        {onLoan && <div style={styles.loanBanner}>On Loan</div>}
+        {onLoan && (
+          <div style={styles.loanBanner}>
+            On Loan
+            {book.borrower && <div style={styles.loanBannerName}>{book.borrower}</div>}
+          </div>
+        )}
         <span
           style={{
             ...styles.statusDot,
@@ -880,6 +901,7 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
     const patch = { ...draft };
     if (patch.shelf === "On Shelf") patch.borrower = "";
     onUpdate(patch);
+    onClose();
   }
 
   return (
@@ -991,7 +1013,7 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
   );
 }
 
-function AddBookModal({ query, setQuery, onSearch, searching, results, selected, onSelect, onManual, onEdit, draft, setDraft, onConfirm, onBackToSearch, onClose }) {
+function AddBookModal({ query, setQuery, onSearch, searching, searchError, results, selected, onSelect, onManual, onEdit, draft, setDraft, onConfirm, onBackToSearch, onClose }) {
   return (
     <Overlay onClose={onClose} wide>
       <h3 style={styles.modalTitle}>Add a book</h3>
@@ -1007,17 +1029,19 @@ function AddBookModal({ query, setQuery, onSearch, searching, results, selected,
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && onSearch()}
             />
-            <button style={styles.primaryBtn} onClick={onSearch} disabled={searching}>
+            <button type="button" style={styles.primaryBtn} onClick={onSearch} disabled={searching}>
               {searching ? "…" : "Search"}
             </button>
           </div>
+
+          {searchError && <div style={styles.pinError}>{searchError}</div>}
 
           <div style={styles.addResultsList}>
             {results.map((item, i) => {
               const info = item.volumeInfo || {};
               const thumb = info.imageLinks?.smallThumbnail?.replace("http://", "https://");
               return (
-                <button key={item.id || i} style={styles.addResultRow} onClick={() => onSelect(item)}>
+                <button type="button" key={item.id || i} style={styles.addResultRow} onClick={() => onSelect(item)}>
                   {thumb ? (
                     <img src={thumb} alt="" style={styles.addResultThumb} />
                   ) : (
@@ -1036,7 +1060,7 @@ function AddBookModal({ query, setQuery, onSearch, searching, results, selected,
           </div>
 
           {query.trim() && (
-            <button style={styles.textBtn} onClick={onManual}>
+            <button type="button" style={styles.textBtn} onClick={onManual}>
               Can't find it? Add "{query.trim()}" manually
             </button>
           )}
@@ -1331,7 +1355,7 @@ const styles = {
   statusDot: { position: "absolute", top: 6, right: 6, width: 8, height: 8, borderRadius: "50%", boxShadow: "0 0 0 2px rgba(0,0,0,0.5)" },
   loanBanner: {
     position: "absolute",
-    top: "44%",
+    top: "40%",
     left: "-10%",
     width: "120%",
     textAlign: "center",
@@ -1342,9 +1366,21 @@ const styles = {
     fontWeight: 700,
     letterSpacing: "0.6px",
     textTransform: "uppercase",
-    padding: "3px 0",
+    padding: "3px 0 4px",
     transform: "rotate(-8deg)",
     boxShadow: "0 2px 6px rgba(0,0,0,0.45)",
+  },
+  loanBannerName: {
+    fontSize: 9,
+    fontWeight: 500,
+    letterSpacing: "0.2px",
+    textTransform: "none",
+    marginTop: 1,
+    opacity: 0.95,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    padding: "0 6px",
   },
   cardTitle: { fontSize: 12.5, marginTop: 8, lineHeight: 1.3 },
   cardSeries: { fontSize: 11, color: PALETTE.creamDim, marginTop: 2 },
