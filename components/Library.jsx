@@ -485,7 +485,6 @@ export default function ReuvensLibrary() {
   async function updateBook(id, patch) {
     const next = books.map((b) => (b.id === id ? { ...b, ...patch } : b));
     await saveBooks(next);
-    if (selectedBook?.id === id) setSelectedBook({ ...selectedBook, ...patch });
     const updated = next.find((b) => b.id === id);
     if (updated) syncBookToSheet(updated);
     showToast("Saved.");
