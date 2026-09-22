@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { storage } from "../lib/storage";
-import { Search, Lock, Unlock, Bell, X, Check, Ban, BookOpen, Settings, Mail } from "lucide-react";
+import { Search, Lock, Unlock, Bell, X, Check, Ban, BookOpen, Settings, Mail, Trash2 } from "lucide-react";
 
 // ---------- Seed data (from the owner's existing spreadsheet) ----------
 const SEED_BOOKS = [
@@ -226,6 +226,25 @@ async function syncBookToSheet(book) {
     });
   } catch {
     // Non-critical — the app's own storage is still the source of truth.
+  }
+}
+
+async function deleteBookFromSheet(book) {
+  if (!SHEET_SYNC_URL) return;
+  try {
+    await fetch(SHEET_SYNC_URL, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        secret: SHEET_SYNC_SECRET,
+        action: "delete",
+        title: book.title,
+        author: book.author,
+      }),
+    });
+  } catch {
+    // Non-critical.
   }
 }
 
@@ -490,6 +509,13 @@ export default function ReuvensLibrary() {
     showToast("Saved.");
   }
 
+  async function deleteBook(id) {
+    const book = books.find((b) => b.id === id);
+    await saveBooks(books.filter((b) => b.id !== id));
+    if (book) deleteBookFromSheet(book);
+    showToast("Book deleted.");
+  }
+
   // ---------- Add a new book ----------
   async function searchGoogleBooks() {
     const q = addQuery.trim();
@@ -727,7 +753,7 @@ export default function ReuvensLibrary() {
               <span style={styles.shelfRule} />
               <span style={styles.shelfCount}>{list.length}</span>
             </div>
-            <div style={styles.shelfRow}>
+            <div className="shelf-row">
               {list.map((b) => (
                 <BookCard key={b.id} book={b} onClick={() => { setSelectedBook(b); setRequestMode(false); setSentInfo(null); }} />
               ))}
@@ -748,6 +774,7 @@ export default function ReuvensLibrary() {
           onRequestCancel={() => setRequestMode(false)}
           onRequestSubmit={() => submitRequest(selectedBook)}
           onUpdate={(patch) => updateBook(selectedBook.id, patch)}
+          onDelete={() => deleteBook(selectedBook.id)}
           onClose={() => { setSelectedBook(null); setRequestMode(false); setSentInfo(null); }}
         />
       )}
@@ -883,7 +910,7 @@ function BookCard({ book, onClick }) {
   );
 }
 
-function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequesterName, sentInfo, onRequestStart, onRequestCancel, onRequestSubmit, onUpdate, onClose }) {
+function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequesterName, sentInfo, onRequestStart, onRequestCancel, onRequestSubmit, onUpdate, onDelete, onClose }) {
   const hue = hueFromString(keyFor(book));
   const [draft, setDraft] = useState({
     read: book.read,
@@ -891,6 +918,7 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
     borrower: book.borrower,
     notes: book.notes,
   });
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
     setDraft({ read: book.read, shelf: book.shelf, borrower: book.borrower, notes: book.notes });
@@ -900,6 +928,11 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
     const patch = { ...draft };
     if (patch.shelf === "On Shelf") patch.borrower = "";
     onUpdate(patch);
+    onClose();
+  }
+
+  function commitDelete() {
+    onDelete();
     onClose();
   }
 
@@ -969,6 +1002,20 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
             onChange={(e) => setDraft((d) => ({ ...d, notes: e.target.value }))}
           />
           <button style={{ ...styles.primaryBtn, marginTop: 10 }} onClick={commitUpdate}>Update</button>
+
+          {!confirmDelete ? (
+            <button style={styles.deleteBtn} onClick={() => setConfirmDelete(true)}>
+              <Trash2 size={14} style={{ marginRight: 6, verticalAlign: "-2px" }} />Delete book
+            </button>
+          ) : (
+            <div style={styles.deleteConfirmBox}>
+              <div style={styles.modalTextDim}>Delete "{book.title}" permanently?</div>
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <button style={styles.dangerBtn} onClick={commitDelete}>Yes, delete</button>
+                <button style={styles.textBtn} onClick={() => setConfirmDelete(false)}>Cancel</button>
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         <>
@@ -1174,6 +1221,26 @@ function Overlay({ children, onClose, wide }) {
 
 const FONT_IMPORT = `
   @import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,wght@0,400;0,600;1,400&family=Inter:wght@400;500;600&display=swap');
+
+  .shelf-row {
+    display: flex;
+    gap: 16px;
+    padding-bottom: 6px;
+  }
+  @media (max-width: 767px) {
+    .shelf-row {
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      scroll-snap-type: x proximity;
+    }
+  }
+  @media (min-width: 768px) {
+    .shelf-row {
+      flex-wrap: wrap;
+      overflow-x: visible;
+    }
+  }
 `;
 
 const styles = {
@@ -1330,8 +1397,9 @@ const styles = {
   },
   shelfRule: { flex: 1, height: 1, background: PALETTE.hairline },
   shelfCount: { fontFamily: "'Inter', sans-serif", fontSize: 12, color: PALETTE.creamDim },
-  shelfRow: { display: "flex", flexWrap: "wrap", gap: 16 },
   card: {
+    flexShrink: 0,
+    scrollSnapAlign: "start",
     background: "transparent",
     border: "none",
     cursor: "pointer",
@@ -1441,6 +1509,33 @@ const styles = {
     fontWeight: 600,
     fontSize: 13.5,
     cursor: "pointer",
+  },
+  deleteBtn: {
+    background: "none",
+    border: "none",
+    color: PALETTE.danger,
+    fontSize: 12.5,
+    marginTop: 12,
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+  },
+  dangerBtn: {
+    background: PALETTE.danger,
+    color: "#fff",
+    border: "none",
+    borderRadius: 8,
+    padding: "8px 14px",
+    fontWeight: 600,
+    fontSize: 13,
+    cursor: "pointer",
+  },
+  deleteConfirmBox: {
+    marginTop: 12,
+    padding: 10,
+    background: "rgba(181,86,63,0.1)",
+    border: `1px solid ${PALETTE.danger}`,
+    borderRadius: 8,
   },
   textBtn: {
     background: "none",
