@@ -931,13 +931,41 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
     borrower: book.borrower,
     notes: book.notes,
     rating: book.rating || 0,
+    cover: book.cover || null,
   });
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [summaryExpanded, setSummaryExpanded] = useState(false);
+  const [showImagePicker, setShowImagePicker] = useState(false);
+  const [imageOptions, setImageOptions] = useState([]);
+  const [imageSearching, setImageSearching] = useState(false);
 
   useEffect(() => {
-    setDraft({ read: book.read, shelf: book.shelf, borrower: book.borrower, notes: book.notes, rating: book.rating || 0 });
+    setDraft({ read: book.read, shelf: book.shelf, borrower: book.borrower, notes: book.notes, rating: book.rating || 0, cover: book.cover || null });
+    setShowImagePicker(false);
   }, [book.id]);
+
+  async function fetchImageOptions() {
+    setShowImagePicker(true);
+    setImageSearching(true);
+    try {
+      const q = encodeURIComponent(`intitle:${book.title} inauthor:${book.author}`);
+      const r = await fetch(
+        `https://www.googleapis.com/books/v1/volumes?q=${q}&maxResults=5${GOOGLE_BOOKS_API_KEY ? `&key=${GOOGLE_BOOKS_API_KEY}` : ""}`
+      );
+      const data = await r.json();
+      const opts = (data.items || [])
+        .map((item) => {
+          const links = item?.volumeInfo?.imageLinks;
+          const url = links?.thumbnail || links?.smallThumbnail;
+          return url ? url.replace("http://", "https://") : null;
+        })
+        .filter(Boolean);
+      setImageOptions(opts);
+    } catch {
+      setImageOptions([]);
+    }
+    setImageSearching(false);
+  }
 
   function commitUpdate() {
     const patch = { ...draft };
@@ -955,8 +983,8 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
     <Overlay onClose={onClose}>
       <div style={styles.detailTop}>
         <div style={styles.detailCoverWrap}>
-          {book.cover ? (
-            <img src={book.cover} alt="" style={styles.detailCoverImg} />
+          {(ownerUnlocked ? draft.cover : book.cover) ? (
+            <img src={ownerUnlocked ? draft.cover : book.cover} alt="" style={styles.detailCoverImg} />
           ) : (
             <div style={{ ...styles.detailCoverPlaceholder, background: `hsl(${hue}, 28%, 22%)`, color: `hsl(${hue}, 45%, 78%)` }}>
               {initials(book.title)}
@@ -982,8 +1010,34 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
               </button>
             ))}
           </div>
+          {ownerUnlocked && (
+            <button type="button" style={styles.textBtn} onClick={fetchImageOptions}>
+              Edit image
+            </button>
+          )}
         </div>
       </div>
+
+      {showImagePicker && (
+        <div style={styles.imagePickerRow}>
+          {imageSearching ? (
+            <span style={styles.modalTextDim}>Searching…</span>
+          ) : imageOptions.length === 0 ? (
+            <span style={styles.modalTextDim}>No alternate images found.</span>
+          ) : (
+            imageOptions.map((url, i) => (
+              <button
+                type="button"
+                key={i}
+                style={styles.imagePickerThumbBtn}
+                onClick={() => { setDraft((d) => ({ ...d, cover: url })); setShowImagePicker(false); }}
+              >
+                <img src={url} alt="" style={styles.imagePickerThumb} />
+              </button>
+            ))
+          )}
+        </div>
+      )}
 
       {!ownerUnlocked && (
         <div style={styles.statusRow}>
@@ -1099,6 +1153,7 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
 }
 
 function AddBookModal({ query, setQuery, onSearch, searching, searchError, results, selected, onSelect, onManual, onEdit, draft, setDraft, onConfirm, onBackToSearch, onClose }) {
+  const [showImages, setShowImages] = useState(false);
   return (
     <Overlay onClose={onClose} wide>
       <h3 style={styles.modalTitle}>Add a book</h3>
@@ -1170,8 +1225,34 @@ function AddBookModal({ query, setQuery, onSearch, searching, searchError, resul
                 onChange={(e) => onEdit({ title: e.target.value })}
               />
               <div style={styles.modalTextDim}>{selected.author || "No author set"}</div>
+              <button type="button" style={styles.textBtn} onClick={() => setShowImages((s) => !s)}>
+                Change image
+              </button>
             </div>
           </div>
+
+          {showImages && (
+            <div style={styles.imagePickerRow}>
+              {results
+                .map((item) => {
+                  const links = item?.volumeInfo?.imageLinks;
+                  const url = links?.thumbnail || links?.smallThumbnail;
+                  return url ? url.replace("http://", "https://") : null;
+                })
+                .filter(Boolean)
+                .slice(0, 5)
+                .map((url, i) => (
+                  <button
+                    type="button"
+                    key={i}
+                    style={styles.imagePickerThumbBtn}
+                    onClick={() => { onEdit({ cover: url }); setShowImages(false); }}
+                  >
+                    <img src={url} alt="" style={styles.imagePickerThumb} />
+                  </button>
+                ))}
+            </div>
+          )}
 
           <div style={styles.editGrid}>
             <label style={styles.fieldLabel}>Author</label>
@@ -1529,6 +1610,9 @@ const styles = {
     overflow: "hidden",
   },
   starBtn: { background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex" },
+  imagePickerRow: { display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" },
+  imagePickerThumbBtn: { background: "none", border: `1px solid ${PALETTE.hairline}`, borderRadius: 4, padding: 2, cursor: "pointer" },
+  imagePickerThumb: { width: 48, height: 68, objectFit: "cover", display: "block", borderRadius: 2 },
   statusPill: {
     fontSize: 11.5,
     fontWeight: 600,
