@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { storage } from "../lib/storage";
-import { Search, Lock, Unlock, Bell, X, Check, Ban, BookOpen, Settings, Mail, Trash2 } from "lucide-react";
+import { Search, Lock, Unlock, Bell, X, Check, Ban, BookOpen, Settings, Mail, Trash2, Star } from "lucide-react";
 
 // ---------- Seed data (from the owner's existing spreadsheet) ----------
 const SEED_BOOKS = [
@@ -397,7 +397,7 @@ export default function ReuvensLibrary() {
   // ---------- Cover fetching (slow, retry-safe) ----------
   useEffect(() => {
     if (!books) return;
-    const need = books.filter((b) => !b.cover && !b.coverTried);
+    const need = books.filter((b) => (!b.cover && !b.coverTried) || !b.summary);
     if (need.length === 0) return;
 
     let cancelled = false;
@@ -410,24 +410,28 @@ export default function ReuvensLibrary() {
           `https://www.googleapis.com/books/v1/volumes?q=${q}&maxResults=5${GOOGLE_BOOKS_API_KEY ? `&key=${GOOGLE_BOOKS_API_KEY}` : ""}`
         );
         if (r.status === 429) {
-          return { cover: null, tried: false, rateLimited: true };
+          return { cover: null, summary: null, tried: false, rateLimited: true };
         }
         if (!r.ok) {
-          return { cover: null, tried: true, rateLimited: false };
+          return { cover: null, summary: null, tried: true, rateLimited: false };
         }
         const data = await r.json();
         const items = data?.items || [];
         let img = null;
+        let summary = null;
         for (const item of items) {
           const links = item?.volumeInfo?.imageLinks;
-          if (links?.thumbnail || links?.smallThumbnail) {
+          if (!img && (links?.thumbnail || links?.smallThumbnail)) {
             img = links.thumbnail || links.smallThumbnail;
-            break;
           }
+          if (!summary && item?.volumeInfo?.description) {
+            summary = item.volumeInfo.description;
+          }
+          if (img && summary) break;
         }
-        return { cover: img ? img.replace("http://", "https://") : null, tried: true, rateLimited: false };
+        return { cover: img ? img.replace("http://", "https://") : null, summary, tried: true, rateLimited: false };
       } catch {
-        return { cover: null, tried: false, rateLimited: false };
+        return { cover: null, summary: null, tried: false, rateLimited: false };
       }
     }
 
@@ -437,7 +441,9 @@ export default function ReuvensLibrary() {
         if (cancelled) return;
         const result = await fetchCover(book);
         current = current.map((b) =>
-          b.id === book.id ? { ...b, cover: result.cover, coverTried: result.tried } : b
+          b.id === book.id
+            ? { ...b, cover: b.cover || result.cover, coverTried: result.tried, summary: b.summary || result.summary || "" }
+            : b
         );
         if (!cancelled) setBooks(current);
         if (result.rateLimited) break;
@@ -551,6 +557,7 @@ export default function ReuvensLibrary() {
       title: info.title || "",
       author: (info.authors && info.authors.join(", ")) || "",
       cover,
+      summary: info.description || "",
     });
   }
 
@@ -590,10 +597,11 @@ export default function ReuvensLibrary() {
       read: addDraft.read,
       shelf: addDraft.shelf,
       borrower: addDraft.shelf === "On Shelf" ? "" : addDraft.borrower,
-      rating: "",
+      rating: 0,
       notes: addDraft.notes,
       cover: addSelected.cover,
       coverTried: true,
+      summary: addSelected.summary || "",
     };
     await saveBooks([...books, newBook]);
     syncBookToSheet(newBook);
@@ -917,11 +925,12 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
     shelf: book.shelf,
     borrower: book.borrower,
     notes: book.notes,
+    rating: book.rating || 0,
   });
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
-    setDraft({ read: book.read, shelf: book.shelf, borrower: book.borrower, notes: book.notes });
+    setDraft({ read: book.read, shelf: book.shelf, borrower: book.borrower, notes: book.notes, rating: book.rating || 0 });
   }, [book.id]);
 
   function commitUpdate() {
@@ -957,6 +966,14 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
         </div>
       </div>
 
+      {book.rating > 0 && (
+        <div style={styles.starRow}>
+          {[1, 2, 3, 4, 5].map((n) => (
+            <Star key={n} size={15} fill={n <= book.rating ? PALETTE.brass : "none"} color={PALETTE.brass} />
+          ))}
+        </div>
+      )}
+
       {!ownerUnlocked && (
         <div style={styles.statusRow}>
           <span style={{ ...styles.statusPill, color: book.read === "Read" ? PALETTE.onShelf : PALETTE.notRead }}>{book.read}</span>
@@ -966,8 +983,23 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
         </div>
       )}
 
+      {book.summary && <p style={styles.modalTextDim}>{book.summary}</p>}
+
       {ownerUnlocked ? (
         <div style={styles.editGrid}>
+          <label style={styles.fieldLabel}>Rating</label>
+          <div style={styles.starRow}>
+            {[1, 2, 3, 4, 5].map((n) => (
+              <button
+                type="button"
+                key={n}
+                style={styles.starBtn}
+                onClick={() => setDraft((d) => ({ ...d, rating: d.rating === n ? 0 : n }))}
+              >
+                <Star size={20} fill={n <= draft.rating ? PALETTE.brass : "none"} color={PALETTE.brass} />
+              </button>
+            ))}
+          </div>
           <label style={styles.fieldLabel}>Read status</label>
           <select style={styles.select} value={draft.read} onChange={(e) => setDraft((d) => ({ ...d, read: e.target.value }))}>
             <option>Read</option>
@@ -1481,6 +1513,8 @@ const styles = {
   detailCoverImg: { width: "100%", height: "100%", objectFit: "cover" },
   detailCoverPlaceholder: { width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Source Serif 4', serif", fontSize: 22 },
   statusRow: { display: "flex", gap: 8, margin: "6px 0 14px" },
+  starRow: { display: "flex", gap: 4, margin: "6px 0 10px" },
+  starBtn: { background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex" },
   statusPill: {
     fontSize: 11.5,
     fontWeight: 600,
