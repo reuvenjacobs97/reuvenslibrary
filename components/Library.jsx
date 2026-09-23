@@ -914,6 +914,11 @@ function BookCard({ book, onClick }) {
       </div>
       <div style={styles.cardTitle}>{book.title}</div>
       {book.seriesName ? <div style={styles.cardSeries}>{book.seriesName}{book.bookNum ? ` · #${book.bookNum}` : ""}</div> : null}
+      <div style={styles.cardStarRow}>
+        {[1, 2, 3, 4, 5].map((n) => (
+          <Star key={n} size={10} fill={n <= book.rating ? PALETTE.brass : "none"} color={PALETTE.brass} />
+        ))}
+      </div>
     </button>
   );
 }
@@ -928,6 +933,7 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
     rating: book.rating || 0,
   });
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [summaryExpanded, setSummaryExpanded] = useState(false);
 
   useEffect(() => {
     setDraft({ read: book.read, shelf: book.shelf, borrower: book.borrower, notes: book.notes, rating: book.rating || 0 });
@@ -963,16 +969,21 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
           {book.seriesName && (
             <div style={styles.modalTextDim}>{book.seriesName}{book.bookNum ? `, book ${book.bookNum}` : ""} · {book.seriesType}</div>
           )}
+          <div style={styles.starRow}>
+            {[1, 2, 3, 4, 5].map((n) => (
+              <button
+                type="button"
+                key={n}
+                style={{ ...styles.starBtn, cursor: ownerUnlocked ? "pointer" : "default" }}
+                disabled={!ownerUnlocked}
+                onClick={() => ownerUnlocked && setDraft((d) => ({ ...d, rating: d.rating === n ? 0 : n }))}
+              >
+                <Star size={16} fill={n <= (ownerUnlocked ? draft.rating : book.rating) ? PALETTE.brass : "none"} color={PALETTE.brass} />
+              </button>
+            ))}
+          </div>
         </div>
       </div>
-
-      {book.rating > 0 && (
-        <div style={styles.starRow}>
-          {[1, 2, 3, 4, 5].map((n) => (
-            <Star key={n} size={15} fill={n <= book.rating ? PALETTE.brass : "none"} color={PALETTE.brass} />
-          ))}
-        </div>
-      )}
 
       {!ownerUnlocked && (
         <div style={styles.statusRow}>
@@ -983,23 +994,19 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
         </div>
       )}
 
-      {book.summary && <p style={styles.modalTextDim}>{book.summary}</p>}
+      {book.summary && (
+        <div>
+          <p style={summaryExpanded ? styles.modalTextDim : { ...styles.modalTextDim, ...styles.clampedText }}>{book.summary}</p>
+          {book.summary.length > 500 && (
+            <button type="button" style={styles.textBtn} onClick={() => setSummaryExpanded((e) => !e)}>
+              {summaryExpanded ? "Show less" : "Read more"}
+            </button>
+          )}
+        </div>
+      )}
 
       {ownerUnlocked ? (
         <div style={styles.editGrid}>
-          <label style={styles.fieldLabel}>Rating</label>
-          <div style={styles.starRow}>
-            {[1, 2, 3, 4, 5].map((n) => (
-              <button
-                type="button"
-                key={n}
-                style={styles.starBtn}
-                onClick={() => setDraft((d) => ({ ...d, rating: d.rating === n ? 0 : n }))}
-              >
-                <Star size={20} fill={n <= draft.rating ? PALETTE.brass : "none"} color={PALETTE.brass} />
-              </button>
-            ))}
-          </div>
           <label style={styles.fieldLabel}>Read status</label>
           <select style={styles.select} value={draft.read} onChange={(e) => setDraft((d) => ({ ...d, read: e.target.value }))}>
             <option>Read</option>
@@ -1514,6 +1521,13 @@ const styles = {
   detailCoverPlaceholder: { width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Source Serif 4', serif", fontSize: 22 },
   statusRow: { display: "flex", gap: 8, margin: "6px 0 14px" },
   starRow: { display: "flex", gap: 4, margin: "6px 0 10px" },
+  cardStarRow: { display: "flex", gap: 1, marginTop: 3 },
+  clampedText: {
+    display: "-webkit-box",
+    WebkitLineClamp: 15,
+    WebkitBoxOrient: "vertical",
+    overflow: "hidden",
+  },
   starBtn: { background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex" },
   statusPill: {
     fontSize: 11.5,
