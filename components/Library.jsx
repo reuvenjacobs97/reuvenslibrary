@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { storage } from "../lib/storage";
-import { Search, Lock, Unlock, Bell, X, Check, Ban, BookOpen, Settings, Mail, Trash2, Star } from "lucide-react";
+import { Search, Lock, Unlock, Bell, X, Check, Ban, BookOpen, Settings, Mail, Trash2, Star, Camera } from "lucide-react";
 
 // ---------- Seed data (from the owner's existing spreadsheet) ----------
 const SEED_BOOKS = [
@@ -523,8 +523,8 @@ export default function ReuvensLibrary() {
   }
 
   // ---------- Add a new book ----------
-  async function searchGoogleBooks() {
-    const q = addQuery.trim();
+  async function searchGoogleBooks(overrideQuery) {
+    const q = (typeof overrideQuery === "string" ? overrideQuery : addQuery).trim();
     if (!q) return;
     setAddSearching(true);
     setAddSearchError("");
@@ -1154,6 +1154,42 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
 
 function AddBookModal({ query, setQuery, onSearch, searching, searchError, results, selected, onSelect, onManual, onEdit, draft, setDraft, onConfirm, onBackToSearch, onClose }) {
   const [showImages, setShowImages] = useState(false);
+  const [imageSearching, setImageSearching] = useState(false);
+  const [imageSearchError, setImageSearchError] = useState("");
+  const fileInputRef = useRef(null);
+
+  async function handleImageFile(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setImageSearching(true);
+    setImageSearchError("");
+    try {
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(",")[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const r = await fetch("/api/vision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: base64 }),
+      });
+      const data = await r.json();
+      if (!r.ok || !data.text) {
+        setImageSearchError(data?.error || "Couldn't read any text from that photo.");
+      } else {
+        const q = data.text.split("\n").slice(0, 2).join(" ").trim();
+        setQuery(q);
+        onSearch(q);
+      }
+    } catch {
+      setImageSearchError("Image search failed — check your connection.");
+    }
+    setImageSearching(false);
+  }
+
   return (
     <Overlay onClose={onClose} wide>
       <h3 style={styles.modalTitle}>Add a book</h3>
@@ -1172,8 +1208,27 @@ function AddBookModal({ query, setQuery, onSearch, searching, searchError, resul
             <button type="button" style={styles.primaryBtn} onClick={onSearch} disabled={searching}>
               {searching ? "…" : "Search"}
             </button>
+            <button
+              type="button"
+              style={styles.iconBtn}
+              title="Search by picture"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={imageSearching}
+            >
+              <Camera size={18} color={PALETTE.creamDim} />
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              style={{ display: "none" }}
+              onChange={handleImageFile}
+            />
           </div>
 
+          {imageSearching && <div style={styles.modalTextDim}>Reading cover…</div>}
+          {imageSearchError && <div style={styles.pinError}>{imageSearchError}</div>}
           {searchError && <div style={styles.pinError}>{searchError}</div>}
 
           <div style={styles.addResultsList}>
