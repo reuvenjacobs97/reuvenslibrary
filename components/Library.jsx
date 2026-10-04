@@ -96,7 +96,9 @@ const SEED_BOOKS = [
   ["The Daylight War","The Demon Cycle","Peter V Brett","Series",3,"Read","On Shelf",""],
   ["The Skull Throne","The Demon Cycle","Peter V Brett","Series",4,"Read","On Shelf",""],
   ["The Core","The Demon Cycle","Peter V Brett","Series",5,"Read","On Shelf",""],
-  ["Red Rising","Red Rising","Pierce Brown","Series",1,"Not Read","On Shelf",""],
+  ["Red Rising","Red Rising Saga","Pierce Brown","Series",1,"Read","On Shelf",""],
+  ["Golden Son","Red Rising Saga","Pierce Brown","Series",2,"Not Read","On Shelf",""],
+  ["Morning Star","Red Rising Saga","Pierce Brown","Series",3,"Not Read","On Shelf",""],
   ["The Poppy War","The Poppy War","R.F Kuang","Series",1,"Read","On Shelf",""],
   ["The Burning God","The Poppy War","R.F Kuang","Series",2,"Not Read","On Shelf",""],
   ["The Dragon Republic","The Poppy War","R.F Kuang","Series",3,"Not Read","On Shelf",""],
@@ -175,6 +177,8 @@ const SEED_BOOKS = [
   ["The Blade Itself","The First Law Trilogy","Joe Abercrombie","Series",1,"Read","On Shelf",""],
   ["Before They Were Hanged","The First Law Trilogy","Joe Abercrombie","Series",2,"Read","On Shelf",""],
   ["Last Argument of Kings","The First Law Trilogy","Joe Abercrombie","Series",3,"Not Read","On Shelf",""],
+  ["Defiant","Skyward","Brandon Sanderson","Series",4,"Read","On Shelf",""],
+  ["The Narrow Road Between Desires","King Killer Chronicle","Patrick Rothfuss","Prequel/Novella","3.5","Read","On Shelf",""],
 ].map((row, i) => ({
   id: `seed-${i}`,
   title: row[0],
@@ -447,13 +451,13 @@ export default function ReuvensLibrary() {
             : b
         );
         if (!cancelled) setBooks(current);
-        if (result.rateLimited) break;
-        await new Promise((resolve) => setTimeout(resolve, DELAY_MS));
-      }
-      if (!cancelled) {
         try {
           await storage.set("books", current);
-        } catch {}
+        } catch {
+          // Transient — the next successful save will catch this book up too.
+        }
+        if (result.rateLimited) break;
+        await new Promise((resolve) => setTimeout(resolve, DELAY_MS));
       }
     })();
 
@@ -521,6 +525,23 @@ export default function ReuvensLibrary() {
     await saveBooks(books.filter((b) => b.id !== id));
     if (book) deleteBookFromSheet(book);
     showToast("Book deleted.");
+  }
+
+  function normalizeKey(str) {
+    return (str || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  }
+
+  async function syncNewBooksFromSeed() {
+    const existingKeys = new Set(books.map((b) => `${normalizeKey(b.title)}|${normalizeKey(b.author)}`));
+    const missing = SEED_BOOKS.filter(
+      (b) => !existingKeys.has(`${normalizeKey(b.title)}|${normalizeKey(b.author)}`)
+    );
+    if (missing.length === 0) {
+      showToast("Nothing new to add.");
+      return;
+    }
+    await saveBooks([...books, ...missing]);
+    showToast(`Added ${missing.length} new book${missing.length === 1 ? "" : "s"}.`);
   }
 
   // ---------- Add a new book ----------
@@ -825,6 +846,13 @@ export default function ReuvensLibrary() {
             placeholder="New PIN"
           />
           <button style={styles.primaryBtn} onClick={changePin}>Save PIN</button>
+
+          <label style={{ ...styles.fieldLabel, marginTop: 18 }}>Catch up the library</label>
+          <p style={styles.modalTextDim}>
+            Adds any books built into the app's code that aren't in your saved library yet. Never removes or changes anything already there.
+          </p>
+          <button style={styles.primaryBtn} onClick={syncNewBooksFromSeed}>Sync new books</button>
+
           <button
             style={styles.textBtn}
             onClick={() => { setOwnerUnlocked(false); setShowSettings(false); showToast("Editing locked."); }}
