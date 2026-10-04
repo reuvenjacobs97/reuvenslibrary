@@ -915,6 +915,11 @@ function BookCard({ book, onClick }) {
 function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequesterName, sentInfo, onRequestStart, onRequestCancel, onRequestSubmit, onUpdate, onDelete, onClose }) {
   const hue = hueFromString(keyFor(book));
   const [draft, setDraft] = useState({
+    title: book.title,
+    author: book.author,
+    seriesName: book.seriesName,
+    seriesType: book.seriesType,
+    bookNum: book.bookNum,
     read: book.read,
     shelf: book.shelf,
     borrower: book.borrower,
@@ -929,7 +934,19 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
   const [imageSearching, setImageSearching] = useState(false);
 
   useEffect(() => {
-    setDraft({ read: book.read, shelf: book.shelf, borrower: book.borrower, notes: book.notes, rating: book.rating || 0, cover: book.cover || null });
+    setDraft({
+      title: book.title,
+      author: book.author,
+      seriesName: book.seriesName,
+      seriesType: book.seriesType,
+      bookNum: book.bookNum,
+      read: book.read,
+      shelf: book.shelf,
+      borrower: book.borrower,
+      notes: book.notes,
+      rating: book.rating || 0,
+      cover: book.cover || null,
+    });
     setShowImagePicker(false);
   }, [book.id]);
 
@@ -981,10 +998,14 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
           )}
         </div>
         <div>
-          <h3 style={styles.modalTitle}>{book.title}</h3>
-          <div style={styles.modalText}>{book.author}</div>
-          {book.seriesName && (
-            <div style={styles.modalTextDim}>{book.seriesName}{book.bookNum ? `, book ${book.bookNum}` : ""} · {book.seriesType}</div>
+          <h3 style={styles.modalTitle}>{ownerUnlocked ? draft.title : book.title}</h3>
+          <div style={styles.modalText}>{ownerUnlocked ? draft.author : book.author}</div>
+          {(ownerUnlocked ? draft.seriesName : book.seriesName) && (
+            <div style={styles.modalTextDim}>
+              {ownerUnlocked ? draft.seriesName : book.seriesName}
+              {(ownerUnlocked ? draft.bookNum : book.bookNum) ? `, book ${ownerUnlocked ? draft.bookNum : book.bookNum}` : ""} ·{" "}
+              {ownerUnlocked ? draft.seriesType : book.seriesType}
+            </div>
           )}
           <div style={styles.starRow}>
             {[1, 2, 3, 4, 5].map((n) => (
@@ -1050,6 +1071,36 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
 
       {ownerUnlocked ? (
         <div style={styles.editGrid}>
+          <label style={styles.fieldLabel}>Title</label>
+          <input style={styles.select} value={draft.title} onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))} />
+          <label style={styles.fieldLabel}>Author</label>
+          <input style={styles.select} value={draft.author} onChange={(e) => setDraft((d) => ({ ...d, author: e.target.value }))} />
+          <label style={styles.fieldLabel}>Series name</label>
+          <input
+            style={styles.select}
+            value={draft.seriesName}
+            onChange={(e) => setDraft((d) => ({ ...d, seriesName: e.target.value }))}
+          />
+          <label style={styles.fieldLabel}>Type</label>
+          <select
+            style={styles.select}
+            value={draft.seriesType}
+            onChange={(e) => setDraft((d) => ({ ...d, seriesType: e.target.value }))}
+          >
+            <option>Stand Alone</option>
+            <option>Series</option>
+            <option>Prequel/Novella</option>
+          </select>
+          {draft.seriesType !== "Stand Alone" && (
+            <>
+              <label style={styles.fieldLabel}>Book #</label>
+              <input
+                style={styles.select}
+                value={draft.bookNum || ""}
+                onChange={(e) => setDraft((d) => ({ ...d, bookNum: e.target.value }))}
+              />
+            </>
+          )}
           <label style={styles.fieldLabel}>Read status</label>
           <select style={styles.select} value={draft.read} onChange={(e) => setDraft((d) => ({ ...d, read: e.target.value }))}>
             <option>Read</option>
