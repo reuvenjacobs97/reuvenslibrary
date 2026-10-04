@@ -334,28 +334,41 @@ export default function ReuvensLibrary() {
     let cancelled = false;
     (async () => {
       try {
-        let booksData;
+        let booksData = null;
+        let booksReallyMissing = false;
         try {
           const res = await storage.get("books");
           booksData = res ? res.value : null;
-        } catch {
-          booksData = null;
+        } catch (err) {
+          if (err.message === "not_found") {
+            booksReallyMissing = true;
+          } else {
+            // A real failure (network error, 500, Redis temporarily
+            // unavailable, etc.) — NEVER treat this as "empty". Show an
+            // error and stop, so nothing gets overwritten.
+            if (!cancelled) {
+              setError("Couldn't load your library from the database. Your data is safe — refresh to try again.");
+              setLoaded(true);
+            }
+            return;
+          }
         }
-        if (!booksData) {
+
+        if (booksReallyMissing) {
           booksData = SEED_BOOKS;
           await storage.set("books", booksData);
         }
-
-        // One-time reset: retry any book still missing a cover with the
-        // improved multi-result matching, instead of leaving it stuck.
-        booksData = booksData.map((b) => (!b.cover ? { ...b, coverTried: false } : b));
 
         let pin = DEFAULT_PIN;
         try {
           const res = await storage.get("owner-pin");
           pin = res ? String(res.value) : DEFAULT_PIN;
-        } catch {
-          await storage.set("owner-pin", DEFAULT_PIN);
+        } catch (err) {
+          if (err.message === "not_found") {
+            await storage.set("owner-pin", DEFAULT_PIN);
+          }
+          // else: real failure — keep the in-memory default for this
+          // session only; don't overwrite whatever's actually stored.
         }
 
         let reqs = [];
@@ -374,8 +387,7 @@ export default function ReuvensLibrary() {
         }
       } catch (e) {
         if (!cancelled) {
-          setError("Couldn't load the library. Try refreshing.");
-          setBooks(SEED_BOOKS);
+          setError("Couldn't load the library. Try refreshing. Your saved data has not been touched.");
           setLoaded(true);
         }
       }
@@ -668,10 +680,17 @@ export default function ReuvensLibrary() {
 
   const pendingCount = requests.filter((r) => r.status === "pending").length;
 
-  if (!loaded) {
+  if (!loaded || !books) {
     return (
-      <div style={{ ...styles.app, display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div style={{ color: PALETTE.creamDim, fontFamily: "'Source Serif 4', serif" }}>Opening the shelves…</div>
+      <div style={{ ...styles.app, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 14 }}>
+        <div style={{ color: PALETTE.creamDim, fontFamily: "'Source Serif 4', serif" }}>
+          {error || "Opening the shelves…"}
+        </div>
+        {error && (
+          <button style={styles.primaryBtn} onClick={() => window.location.reload()}>
+            Retry
+          </button>
+        )}
       </div>
     );
   }

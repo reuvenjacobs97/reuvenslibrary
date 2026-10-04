@@ -1,8 +1,5 @@
 import { Redis } from "@upstash/redis";
 
-// Vercel's Upstash integration has used a couple of different env var
-// naming conventions over time — check both so this works regardless
-// of which one your project ended up with.
 function getRedis() {
   const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
