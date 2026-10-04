@@ -1165,18 +1165,39 @@ function AddBookModal({ query, setQuery, onSearch, searching, searchError, resul
     setImageSearching(true);
     setImageSearchError("");
     try {
+      // Shrink the photo client-side first — raw phone camera photos are
+      // often several MB, well past what a serverless request allows.
       const base64 = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result.split(",")[1]);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = () => {
+          URL.revokeObjectURL(url);
+          const maxDim = 1200;
+          const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.round(img.width * scale);
+          canvas.height = Math.round(img.height * scale);
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL("image/jpeg", 0.8).split(",")[1]);
+        };
+        img.onerror = () => reject(new Error("Couldn't read that image file."));
+        img.src = url;
       });
+
       const r = await fetch("/api/vision", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ image: base64 }),
       });
-      const data = await r.json();
+      let data;
+      try {
+        data = await r.json();
+      } catch {
+        setImageSearchError(`Server error (${r.status}) — the request may still be too large.`);
+        setImageSearching(false);
+        return;
+      }
       if (!r.ok || !data.text) {
         setImageSearchError(data?.error || "Couldn't read any text from that photo.");
       } else {
@@ -1184,8 +1205,8 @@ function AddBookModal({ query, setQuery, onSearch, searching, searchError, resul
         setQuery(q);
         onSearch(q);
       }
-    } catch {
-      setImageSearchError("Image search failed — check your connection.");
+    } catch (err) {
+      setImageSearchError(err?.message || "Image search failed — check your connection.");
     }
     setImageSearching(false);
   }
