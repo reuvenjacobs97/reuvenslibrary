@@ -344,17 +344,6 @@ export default function ReuvensLibrary() {
         if (!booksData) {
           booksData = SEED_BOOKS;
           await storage.set("books", booksData);
-        } else {
-          const existingKeys = new Set(
-            booksData.map((b) => `${b.title}|${b.author}`.toLowerCase())
-          );
-          const missing = SEED_BOOKS.filter(
-            (b) => !existingKeys.has(`${b.title}|${b.author}`.toLowerCase())
-          );
-          if (missing.length > 0) {
-            booksData = [...booksData, ...missing];
-            await storage.set("books", booksData);
-          }
         }
 
         // One-time reset: retry any book still missing a cover with the
