@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { storage } from "../lib/storage";
-import { Search, Lock, Unlock, Bell, X, Check, Ban, BookOpen, Settings, Mail, Trash2, Star, Camera } from "lucide-react";
+import { Search, Lock, Unlock, Bell, X, Check, Ban, Settings, Mail, Trash2, Star, Camera } from "lucide-react";
 
 // ---------- Seed data (from the owner's existing spreadsheet) ----------
 const SEED_BOOKS = [
@@ -384,10 +384,12 @@ export default function ReuvensLibrary() {
     return () => { cancelled = true; };
   }, []);
 
-  // ---------- Cover fetching (slow, retry-safe) ----------
+  // ---------- Cover fetching (cached persistently) ----------
   useEffect(() => {
     if (!books) return;
-    const need = books.filter((b) => (!b.cover && !b.coverTried) || !b.summary);
+
+    // Only fetch books that have never been tried before
+    const need = books.filter((b) => !b.coverTried);
     if (need.length === 0) return;
 
     let cancelled = false;
@@ -397,7 +399,9 @@ export default function ReuvensLibrary() {
       try {
         const q = encodeURIComponent(`intitle:${book.title} inauthor:${book.author}`);
         const r = await fetch(
-          `https://www.googleapis.com/books/v1/volumes?q=${q}&maxResults=5${GOOGLE_BOOKS_API_KEY ? `&key=${GOOGLE_BOOKS_API_KEY}` : ""}`
+          `https://www.googleapis.com/books/v1/volumes?q=${q}&maxResults=5${
+            GOOGLE_BOOKS_API_KEY ? `&key=${GOOGLE_BOOKS_API_KEY}` : ""
+          }`
         );
         if (r.status === 429) {
           return { cover: null, summary: null, tried: false, rateLimited: true };
@@ -409,6 +413,7 @@ export default function ReuvensLibrary() {
         const items = data?.items || [];
         let img = null;
         let summary = null;
+
         for (const item of items) {
           const links = item?.volumeInfo?.imageLinks;
           if (!img && (links?.thumbnail || links?.smallThumbnail)) {
@@ -419,35 +424,54 @@ export default function ReuvensLibrary() {
           }
           if (img && summary) break;
         }
-        return { cover: img ? img.replace("http://", "https://") : null, summary, tried: true, rateLimited: false };
+
+        return {
+          cover: img ? img.replace("http://", "https://") : null,
+          summary,
+          tried: true,
+          rateLimited: false,
+        };
       } catch {
-        return { cover: null, summary: null, tried: false, rateLimited: false };
+        return { cover: null, summary: null, tried: true, rateLimited: false };
       }
     }
 
     (async () => {
-      let current = books;
+      let current = [...books];
       for (const book of need) {
         if (cancelled) return;
+
         const result = await fetchCover(book);
+        if (result.rateLimited) break;
+
         current = current.map((b) =>
           b.id === book.id
-            ? { ...b, cover: b.cover || result.cover, coverTried: result.tried, summary: b.summary || result.summary || "" }
+            ? {
+                ...b,
+                cover: b.cover || result.cover,
+                coverTried: result.tried,
+                summary: b.summary || result.summary || "",
+              }
             : b
         );
-        if (!cancelled) setBooks(current);
-        try {
-          await storage.set("books", current);
-        } catch {
-          // Transient — the next successful save will catch this book up too.
+
+        if (!cancelled) {
+          setBooks(current);
+          // Persist cover updates immediately to storage
+          try {
+            await storage.set("books", current);
+          } catch (e) {
+            console.error("Failed to persist cover updates", e);
+          }
         }
-        if (result.rateLimited) break;
+
         await new Promise((resolve) => setTimeout(resolve, DELAY_MS));
       }
     })();
 
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      cancelled = true;
+    };
   }, [loaded]);
 
   const saveBooks = useCallback(async (next) => {
