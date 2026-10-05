@@ -196,7 +196,7 @@ const SEED_BOOKS = [
 }));
 
 const OWNER_EMAIL = "reuvenjacobs97@gmail.com";
-const DEFAULT_PIN = "1234";
+const OWNER_PIN = "1234"; // hardcoded — not stored in the database
 
 // Paste the Google Apps Script Web App URL here once you've deployed it.
 // Leave blank to skip sheet sync.
@@ -287,7 +287,6 @@ function hueFromString(str) {
 export default function ReuvensLibrary() {
   const [books, setBooks] = useState(null);
   const [requests, setRequests] = useState([]);
-  const [ownerPin, setOwnerPin] = useState(DEFAULT_PIN);
   const [ownerUnlocked, setOwnerUnlocked] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(null);
@@ -301,7 +300,6 @@ export default function ReuvensLibrary() {
   const [pinInput, setPinInput] = useState("");
   const [pinError, setPinError] = useState("");
   const [showSettings, setShowSettings] = useState(false);
-  const [newPin, setNewPin] = useState("");
 
   const [showRequests, setShowRequests] = useState(false);
   const [requesterName, setRequesterName] = useState("");
@@ -363,18 +361,6 @@ export default function ReuvensLibrary() {
           await storage.set("books", booksData);
         }
 
-        let pin = DEFAULT_PIN;
-        try {
-          const res = await storage.get("owner-pin");
-          pin = res ? String(res.value) : DEFAULT_PIN;
-        } catch (err) {
-          if (err.message === "not_found") {
-            await storage.set("owner-pin", DEFAULT_PIN);
-          }
-          // else: real failure — keep the in-memory default for this
-          // session only; don't overwrite whatever's actually stored.
-        }
-
         let reqs = [];
         try {
           const res = await storage.get("requests");
@@ -385,7 +371,6 @@ export default function ReuvensLibrary() {
 
         if (!cancelled) {
           setBooks(booksData);
-          setOwnerPin(pin);
           setRequests(reqs);
           setLoaded(true);
         }
@@ -485,7 +470,7 @@ export default function ReuvensLibrary() {
 
   // ---------- Owner unlock ----------
   function tryUnlock() {
-    if (String(pinInput).trim() === String(ownerPin).trim()) {
+    if (String(pinInput).trim() === OWNER_PIN) {
       setOwnerUnlocked(true);
       setShowPinModal(false);
       setPinInput("");
@@ -493,21 +478,6 @@ export default function ReuvensLibrary() {
       showToast("Edit mode unlocked.");
     } else {
       setPinError("Wrong PIN.");
-    }
-  }
-
-  async function changePin() {
-    if (newPin.trim().length < 3) {
-      showToast("PIN needs at least 3 characters.");
-      return;
-    }
-    try {
-      await storage.set("owner-pin", newPin.trim());
-      setOwnerPin(newPin.trim());
-      setNewPin("");
-      showToast("PIN updated.");
-    } catch {
-      showToast("Couldn't update the PIN.");
     }
   }
 
@@ -838,16 +808,8 @@ export default function ReuvensLibrary() {
         <Overlay onClose={() => setShowSettings(false)}>
           <h3 style={styles.modalTitle}><Settings size={16} style={{ verticalAlign: "-2px", marginRight: 6 }} />Owner settings</h3>
           <p style={styles.modalText}>Editing is unlocked for this session.</p>
-          <label style={styles.fieldLabel}>Change PIN</label>
-          <input
-            style={styles.pinInput}
-            value={newPin}
-            onChange={(e) => setNewPin(e.target.value)}
-            placeholder="New PIN"
-          />
-          <button style={styles.primaryBtn} onClick={changePin}>Save PIN</button>
 
-          <label style={{ ...styles.fieldLabel, marginTop: 18 }}>Catch up the library</label>
+          <label style={styles.fieldLabel}>Catch up the library</label>
           <p style={styles.modalTextDim}>
             Adds any books built into the app's code that aren't in your saved library yet. Never removes or changes anything already there.
           </p>
@@ -925,11 +887,12 @@ export default function ReuvensLibrary() {
 function BookCard({ book, onClick }) {
   const hue = hueFromString(keyFor(book));
   const onLoan = book.shelf === "On Loan";
+  const [imgFailed, setImgFailed] = useState(false);
   return (
     <button style={styles.card} onClick={onClick}>
       <div style={styles.coverWrap}>
-        {book.cover ? (
-          <img src={book.cover} alt="" style={styles.coverImg} />
+        {book.cover && !imgFailed ? (
+          <img src={book.cover} alt="" style={styles.coverImg} onError={() => setImgFailed(true)} />
         ) : (
           <div style={{ ...styles.coverPlaceholder, background: `hsl(${hue}, 28%, 22%)`, color: `hsl(${hue}, 45%, 78%)` }}>
             {initials(book.title)}
@@ -979,6 +942,7 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
   const [showImagePicker, setShowImagePicker] = useState(false);
   const [imageOptions, setImageOptions] = useState([]);
   const [imageSearching, setImageSearching] = useState(false);
+  const [imgFailed, setImgFailed] = useState(false);
 
   useEffect(() => {
     setDraft({
@@ -995,6 +959,7 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
       cover: book.cover || null,
     });
     setShowImagePicker(false);
+    setImgFailed(false);
   }, [book.id]);
 
   async function fetchImageOptions() {
@@ -1036,8 +1001,13 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
     <Overlay onClose={onClose}>
       <div style={styles.detailTop}>
         <div style={styles.detailCoverWrap}>
-          {(ownerUnlocked ? draft.cover : book.cover) ? (
-            <img src={ownerUnlocked ? draft.cover : book.cover} alt="" style={styles.detailCoverImg} />
+          {(ownerUnlocked ? draft.cover : book.cover) && !imgFailed ? (
+            <img
+              src={ownerUnlocked ? draft.cover : book.cover}
+              alt=""
+              style={styles.detailCoverImg}
+              onError={() => setImgFailed(true)}
+            />
           ) : (
             <div style={{ ...styles.detailCoverPlaceholder, background: `hsl(${hue}, 28%, 22%)`, color: `hsl(${hue}, 45%, 78%)` }}>
               {initials(book.title)}
@@ -1087,7 +1057,7 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
                 type="button"
                 key={i}
                 style={styles.imagePickerThumbBtn}
-                onClick={() => { setDraft((d) => ({ ...d, cover: url })); setShowImagePicker(false); }}
+                onClick={() => { setDraft((d) => ({ ...d, cover: url })); setShowImagePicker(false); setImgFailed(false); }}
               >
                 <img src={url} alt="" style={styles.imagePickerThumb} />
               </button>
