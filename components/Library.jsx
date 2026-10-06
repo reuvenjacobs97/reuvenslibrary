@@ -371,6 +371,30 @@ export default function ReuvensLibrary() {
           reqs = [];
         }
 
+        // One-time migration: books that previously exhausted the old strict
+        // intitle:/inauthor: lookup are allowed to retry with the plain query.
+        const retryResetVersion = "plain-google-books-query-v1";
+        const booksAfterRetryReset = booksData.map((b) => {
+          if (b.coverRetryResetVersion === retryResetVersion) return b;
+          if (!b.cover && b.coverTried) {
+            return {
+              ...b,
+              coverTried: false,
+              coverRetryResetVersion: retryResetVersion,
+            };
+          }
+          return b;
+        });
+
+        if (booksAfterRetryReset !== booksData) {
+          booksData = booksAfterRetryReset;
+          try {
+            await storage.set("books", booksData);
+          } catch {
+            // Non-critical — the next successful save will persist the retry reset.
+          }
+        }
+
         if (!cancelled) {
           setBooks(booksData);
           setRequests(reqs);
@@ -397,7 +421,7 @@ export default function ReuvensLibrary() {
 
     async function fetchCover(book) {
       try {
-        const q = encodeURIComponent(`intitle:${book.title} inauthor:${book.author}`);
+        const q = encodeURIComponent(`${book.title} ${book.author}`);
         const r = await fetch(
           `https://www.googleapis.com/books/v1/volumes?q=${q}&maxResults=5${GOOGLE_BOOKS_API_KEY ? `&key=${GOOGLE_BOOKS_API_KEY}` : ""}`
         );
@@ -979,7 +1003,7 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
     setShowImagePicker(true);
     setImageSearching(true);
     try {
-      const q = encodeURIComponent(`intitle:${book.title} inauthor:${book.author}`);
+      const q = encodeURIComponent(`${book.title} ${book.author}`);
       const r = await fetch(
         `https://www.googleapis.com/books/v1/volumes?q=${q}&maxResults=5${GOOGLE_BOOKS_API_KEY ? `&key=${GOOGLE_BOOKS_API_KEY}` : ""}`
       );
