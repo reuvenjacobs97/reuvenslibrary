@@ -193,6 +193,8 @@ const SEED_BOOKS = [
   notes: "",
   cover: null,
   coverTried: false,
+  summary: "",
+  summaryTried: false,
 }));
 
 const OWNER_EMAIL = "reuvenjacobs97@gmail.com";
@@ -387,7 +389,7 @@ export default function ReuvensLibrary() {
   // ---------- Cover fetching (slow, retry-safe) ----------
   useEffect(() => {
     if (!books) return;
-    const need = books.filter((b) => (!b.cover && !b.coverTried) || !b.summary);
+    const need = books.filter((b) => (!b.cover && !b.coverTried) || (!b.summary && !b.summaryTried));
     if (need.length === 0) return;
 
     let cancelled = false;
@@ -401,6 +403,10 @@ export default function ReuvensLibrary() {
         );
         if (r.status === 429) {
           return { cover: null, summary: null, tried: false, rateLimited: true };
+        }
+        if (r.status >= 500) {
+          // Transient server error (e.g. 503) — retry on a future load, keep going now.
+          return { cover: null, summary: null, tried: false, rateLimited: false };
         }
         if (!r.ok) {
           return { cover: null, summary: null, tried: true, rateLimited: false };
@@ -430,11 +436,18 @@ export default function ReuvensLibrary() {
       for (const book of need) {
         if (cancelled) return;
         const result = await fetchCover(book);
-        current = current.map((b) =>
-          b.id === book.id
-            ? { ...b, cover: b.cover || result.cover, coverTried: result.tried, summary: b.summary || result.summary || "" }
-            : b
-        );
+        current = current.map((b) => {
+          if (b.id !== book.id) return b;
+          const coverTried = b.cover ? true : (b.coverTried || result.tried);
+          const summaryTried = b.summary ? true : (b.summaryTried || result.tried);
+          return {
+            ...b,
+            cover: b.cover || result.cover,
+            coverTried,
+            summary: b.summary || result.summary || "",
+            summaryTried,
+          };
+        });
         if (!cancelled) setBooks(current);
         try {
           await storage.set("books", current);
