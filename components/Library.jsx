@@ -730,7 +730,9 @@ export default function ReuvensLibrary() {
       <header style={styles.header}>
         <div>
           <h1 style={styles.h1}>Reuven's Library</h1>
-          <p style={styles.subtitle}>{books.length} books on the shelf</p>
+          <p style={styles.subtitle}>
+            {books.filter((b) => b.shelf === "On Shelf").length} books on shelf · {books.filter((b) => b.shelf === "On Loan").length} books on loan
+          </p>
         </div>
         <div style={styles.headerActions}>
           {ownerUnlocked && (
