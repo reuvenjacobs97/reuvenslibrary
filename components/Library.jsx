@@ -296,6 +296,7 @@ export default function ReuvensLibrary() {
   const [query, setQuery] = useState("");
   const [shelfFilter, setShelfFilter] = useState("all");
   const [readFilter, setReadFilter] = useState("all");
+  const [sortBy, setSortBy] = useState("author"); // "author" | "series" | "title"
 
   const [selectedBook, setSelectedBook] = useState(null);
   const [showPinModal, setShowPinModal] = useState(false);
@@ -690,7 +691,54 @@ export default function ReuvensLibrary() {
   }, [books, query, shelfFilter, readFilter]);
 
   const grouped = useMemo(() => {
+    const NO_SERIES = "No series";
+    // Title sort ignores a leading "The / A / An", like a library shelf.
+    const sortTitle = (t) => (t || "").toLowerCase().replace(/^(the|a|an)\s+/, "");
+    const byBookNum = (a, b) => {
+      const an = parseFloat(a.bookNum);
+      const bn = parseFloat(b.bookNum);
+      const aHas = !Number.isNaN(an);
+      const bHas = !Number.isNaN(bn);
+      if (aHas && bHas && an !== bn) return an - bn;
+      if (aHas !== bHas) return aHas ? -1 : 1;
+      return sortTitle(a.title).localeCompare(sortTitle(b.title));
+    };
+
     const map = new Map();
+
+    if (sortBy === "title") {
+      // One shelf per starting letter, books A–Z within it.
+      for (const b of filtered) {
+        const first = sortTitle(b.title).charAt(0).toUpperCase();
+        const key = /[A-Z]/.test(first) ? first : "#";
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push(b);
+      }
+      for (const [, list] of map) {
+        list.sort((a, b) => sortTitle(a.title).localeCompare(sortTitle(b.title)));
+      }
+      return Array.from(map.entries()).sort((a, b) => {
+        if (a[0] === "#") return 1;
+        if (b[0] === "#") return -1;
+        return a[0].localeCompare(b[0]);
+      });
+    }
+
+    if (sortBy === "series") {
+      for (const b of filtered) {
+        const key = (b.seriesName || "").trim() || NO_SERIES;
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push(b);
+      }
+      for (const [, list] of map) list.sort(byBookNum);
+      return Array.from(map.entries()).sort((a, b) => {
+        if (a[0] === NO_SERIES) return 1; // books with no series go last
+        if (b[0] === NO_SERIES) return -1;
+        return a[0].localeCompare(b[0]);
+      });
+    }
+
+    // Default: by author (original behaviour)
     for (const b of filtered) {
       if (!map.has(b.author)) map.set(b.author, []);
       map.get(b.author).push(b);
@@ -704,7 +752,7 @@ export default function ReuvensLibrary() {
       });
     }
     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [filtered]);
+  }, [filtered, sortBy]);
 
   const pendingCount = requests.filter((r) => r.status === "pending").length;
 
@@ -781,6 +829,23 @@ export default function ReuvensLibrary() {
               style={{ ...styles.chip, ...(readFilter === v ? styles.chipActive : {}) }}
             >
               {v === "all" ? "Any progress" : v}
+            </button>
+          ))}
+        </div>
+        <div style={styles.chips}>
+          <span style={styles.sortLabel}>Sort by</span>
+          {[
+            ["author", "Author"],
+            ["series", "Series"],
+            ["title", "Book name"],
+          ].map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setSortBy(value)}
+              style={{ ...styles.chip, ...(sortBy === value ? styles.chipActive : {}) }}
+            >
+              {label}
             </button>
           ))}
         </div>
@@ -1654,7 +1719,8 @@ const styles = {
     width: "100%",
     fontFamily: "'Inter', sans-serif",
   },
-  chips: { display: "flex", gap: 6, flexWrap: "wrap" },
+  chips: { display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" },
+  sortLabel: { fontSize: 12, color: PALETTE.creamDim, marginRight: 2 },
   chip: {
     background: "transparent",
     border: `1px solid ${PALETTE.hairline}`,
