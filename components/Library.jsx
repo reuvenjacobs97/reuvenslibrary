@@ -199,6 +199,7 @@ const SEED_BOOKS = [
 
 const OWNER_EMAIL = "reuvenjacobs97@gmail.com";
 const OWNER_PIN = "1234"; // hardcoded — not stored in the database
+const NON_SERIES_LABEL = "Prequel, Novella or Stand alone";
 
 // Paste the Google Apps Script Web App URL here once you've deployed it.
 // Leave blank to skip sheet sync.
@@ -296,7 +297,6 @@ export default function ReuvensLibrary() {
   const [query, setQuery] = useState("");
   const [shelfFilter, setShelfFilter] = useState("all");
   const [readFilter, setReadFilter] = useState("all");
-  const [sortBy, setSortBy] = useState("author"); // "author" | "series" | "title"
 
   const [selectedBook, setSelectedBook] = useState(null);
   const [showPinModal, setShowPinModal] = useState(false);
@@ -690,9 +690,10 @@ export default function ReuvensLibrary() {
     });
   }, [books, query, shelfFilter, readFilter]);
 
+  // Library layout: Author -> Series. Anything that isn't part of a series
+  // (stand-alones, prequels, novellas, or a book with no series name) goes
+  // into one "Prequel, Novella or Stand alone" group at the end of its author.
   const grouped = useMemo(() => {
-    const NO_SERIES = "No series";
-    // Title sort ignores a leading "The / A / An", like a library shelf.
     const sortTitle = (t) => (t || "").toLowerCase().replace(/^(the|a|an)\s+/, "");
     const byBookNum = (a, b) => {
       const an = parseFloat(a.bookNum);
@@ -704,55 +705,36 @@ export default function ReuvensLibrary() {
       return sortTitle(a.title).localeCompare(sortTitle(b.title));
     };
 
-    const map = new Map();
-
-    if (sortBy === "title") {
-      // One shelf per starting letter, books A–Z within it.
-      for (const b of filtered) {
-        const first = sortTitle(b.title).charAt(0).toUpperCase();
-        const key = /[A-Z]/.test(first) ? first : "#";
-        if (!map.has(key)) map.set(key, []);
-        map.get(key).push(b);
-      }
-      for (const [, list] of map) {
-        list.sort((a, b) => sortTitle(a.title).localeCompare(sortTitle(b.title)));
-      }
-      return Array.from(map.entries()).sort((a, b) => {
-        if (a[0] === "#") return 1;
-        if (b[0] === "#") return -1;
-        return a[0].localeCompare(b[0]);
-      });
-    }
-
-    if (sortBy === "series") {
-      for (const b of filtered) {
-        const key = (b.seriesName || "").trim() || NO_SERIES;
-        if (!map.has(key)) map.set(key, []);
-        map.get(key).push(b);
-      }
-      for (const [, list] of map) list.sort(byBookNum);
-      return Array.from(map.entries()).sort((a, b) => {
-        if (a[0] === NO_SERIES) return 1; // books with no series go last
-        if (b[0] === NO_SERIES) return -1;
-        return a[0].localeCompare(b[0]);
-      });
-    }
-
-    // Default: by author (original behaviour)
+    const authors = new Map();
     for (const b of filtered) {
-      if (!map.has(b.author)) map.set(b.author, []);
-      map.get(b.author).push(b);
+      const inSeries = b.seriesType === "Series" && (b.seriesName || "").trim();
+      const key = inSeries ? b.seriesName.trim() : NON_SERIES_LABEL;
+      if (!authors.has(b.author)) authors.set(b.author, new Map());
+      const subs = authors.get(b.author);
+      if (!subs.has(key)) subs.set(key, []);
+      subs.get(key).push(b);
     }
-    for (const [, list] of map) {
-      list.sort((a, b) => {
-        if (a.seriesName !== b.seriesName) return (a.seriesName || "").localeCompare(b.seriesName || "");
-        const an = parseFloat(a.bookNum) || 0;
-        const bn = parseFloat(b.bookNum) || 0;
-        return an - bn;
+
+    return Array.from(authors.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([author, subMap]) => {
+        const subs = Array.from(subMap.entries())
+          .map(([label, list]) => {
+            if (label === NON_SERIES_LABEL) {
+              list.sort((a, b) => sortTitle(a.title).localeCompare(sortTitle(b.title)));
+            } else {
+              list.sort(byBookNum);
+            }
+            return [label, list];
+          })
+          .sort((a, b) => {
+            if (a[0] === NON_SERIES_LABEL) return 1;
+            if (b[0] === NON_SERIES_LABEL) return -1;
+            return a[0].localeCompare(b[0]);
+          });
+        return [author, subs];
       });
-    }
-    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [filtered, sortBy]);
+  }, [filtered]);
 
   const pendingCount = requests.filter((r) => r.status === "pending").length;
 
@@ -832,23 +814,6 @@ export default function ReuvensLibrary() {
             </button>
           ))}
         </div>
-        <div style={styles.chips}>
-          <span style={styles.sortLabel}>Sort by</span>
-          {[
-            ["author", "Author"],
-            ["series", "Series"],
-            ["title", "Book name"],
-          ].map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => setSortBy(value)}
-              style={{ ...styles.chip, ...(sortBy === value ? styles.chipActive : {}) }}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
       </div>
 
       {error && <div style={styles.errorBanner}>{error}</div>}
@@ -857,18 +822,23 @@ export default function ReuvensLibrary() {
         {grouped.length === 0 && (
           <div style={styles.emptyState}>No books match that search.</div>
         )}
-        {grouped.map(([author, list]) => (
+        {grouped.map(([author, subgroups]) => (
           <section key={author} style={styles.shelfSection}>
             <div style={styles.shelfLabel}>
               <span>{author}</span>
               <span style={styles.shelfRule} />
-              <span style={styles.shelfCount}>{list.length}</span>
+              <span style={styles.shelfCount}>{subgroups.reduce((n, [, list]) => n + list.length, 0)}</span>
             </div>
-            <div className="shelf-row">
-              {list.map((b) => (
-                <BookCard key={b.id} book={b} onClick={() => { setSelectedBook(b); setRequestMode(false); setSentInfo(null); }} />
-              ))}
-            </div>
+            {subgroups.map(([label, list]) => (
+              <div key={label} style={styles.seriesBlock}>
+                <div style={styles.seriesLabel}>{label}</div>
+                <div className="shelf-row">
+                  {list.map((b) => (
+                    <BookCard key={b.id} book={b} onClick={() => { setSelectedBook(b); setRequestMode(false); setSentInfo(null); }} />
+                  ))}
+                </div>
+              </div>
+            ))}
           </section>
         ))}
       </main>
@@ -1720,7 +1690,8 @@ const styles = {
     fontFamily: "'Inter', sans-serif",
   },
   chips: { display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" },
-  sortLabel: { fontSize: 12, color: PALETTE.creamDim, marginRight: 2 },
+  seriesBlock: { marginBottom: 18 },
+  seriesLabel: { fontSize: 12.5, color: PALETTE.creamDim, margin: "0 0 10px", letterSpacing: "0.3px" },
   chip: {
     background: "transparent",
     border: `1px solid ${PALETTE.hairline}`,
