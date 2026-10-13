@@ -199,7 +199,9 @@ const SEED_BOOKS = [
 
 const OWNER_EMAIL = "reuvenjacobs97@gmail.com";
 const OWNER_PIN = "1234"; // hardcoded — not stored in the database
-const NON_SERIES_LABEL = "Prequel, Novella or Stand alone";
+const STAND_ALONE_LABEL = "Stand Alone";
+const PREQUEL_LABEL = "Prequel/Novella";
+const NO_SERIES_NAME_LABEL = "No series name"; // type is Series but the Series name field is empty
 
 // Paste the Google Apps Script Web App URL here once you've deployed it.
 // Leave blank to skip sheet sync.
@@ -690,9 +692,10 @@ export default function ReuvensLibrary() {
     });
   }, [books, query, shelfFilter, readFilter]);
 
-  // Library layout: Author -> Series. Anything that isn't part of a series
-  // (stand-alones, prequels, novellas, or a book with no series name) goes
-  // into one "Prequel, Novella or Stand alone" group at the end of its author.
+  // Library layout: Author -> group, where the group comes from the book's Type:
+  //   Series          -> its Series name (A-Z, books in book-number order)
+  //   Stand Alone     -> "Stand Alone"
+  //   Prequel/Novella -> "Prequel/Novella"
   const grouped = useMemo(() => {
     const sortTitle = (t) => (t || "").toLowerCase().replace(/^(the|a|an)\s+/, "");
     const byBookNum = (a, b) => {
@@ -704,11 +707,22 @@ export default function ReuvensLibrary() {
       if (aHas !== bHas) return aHas ? -1 : 1;
       return sortTitle(a.title).localeCompare(sortTitle(b.title));
     };
+    const groupKey = (b) => {
+      if (b.seriesType === "Series") return (b.seriesName || "").trim() || NO_SERIES_NAME_LABEL;
+      if (b.seriesType === "Prequel/Novella") return PREQUEL_LABEL;
+      return STAND_ALONE_LABEL;
+    };
+    // Named series first (A-Z), then unnamed series, then Stand Alone, then Prequel/Novella.
+    const rank = (label) => {
+      if (label === NO_SERIES_NAME_LABEL) return 1;
+      if (label === STAND_ALONE_LABEL) return 2;
+      if (label === PREQUEL_LABEL) return 3;
+      return 0;
+    };
 
     const authors = new Map();
     for (const b of filtered) {
-      const inSeries = b.seriesType === "Series" && (b.seriesName || "").trim();
-      const key = inSeries ? b.seriesName.trim() : NON_SERIES_LABEL;
+      const key = groupKey(b);
       if (!authors.has(b.author)) authors.set(b.author, new Map());
       const subs = authors.get(b.author);
       if (!subs.has(key)) subs.set(key, []);
@@ -720,18 +734,14 @@ export default function ReuvensLibrary() {
       .map(([author, subMap]) => {
         const subs = Array.from(subMap.entries())
           .map(([label, list]) => {
-            if (label === NON_SERIES_LABEL) {
+            if (label === STAND_ALONE_LABEL || label === PREQUEL_LABEL) {
               list.sort((a, b) => sortTitle(a.title).localeCompare(sortTitle(b.title)));
             } else {
               list.sort(byBookNum);
             }
             return [label, list];
           })
-          .sort((a, b) => {
-            if (a[0] === NON_SERIES_LABEL) return 1;
-            if (b[0] === NON_SERIES_LABEL) return -1;
-            return a[0].localeCompare(b[0]);
-          });
+          .sort((a, b) => rank(a[0]) - rank(b[0]) || a[0].localeCompare(b[0]));
         return [author, subs];
       });
   }, [filtered]);
