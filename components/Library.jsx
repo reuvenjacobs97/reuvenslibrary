@@ -257,6 +257,147 @@ async function deleteBookFromSheet(book) {
   }
 }
 
+// ---------- Book search: Google Books (with retries) + Open Library fallback ----------
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function fetchGoogleBooks(query) {
+  const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=10${GOOGLE_BOOKS_API_KEY ? `&key=${GOOGLE_BOOKS_API_KEY}` : ""}`;
+  let lastError = new Error("Google Books is unavailable");
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const r = await fetch(url);
+      if (r.ok) {
+        const data = await r.json();
+        return data.items || [];
+      }
+      lastError = new Error(`Google Books returned ${r.status}`);
+      // Only transient failures are worth retrying (e.g. 503 backendFailed, 429).
+      if (r.status !== 429 && r.status < 500) break;
+    } catch (err) {
+      lastError = err;
+    }
+    await sleep(600 * (attempt + 1));
+  }
+  throw lastError;
+}
+
+async function fetchOpenLibrary(query) {
+  const url = `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&limit=10&fields=key,title,author_name,first_publish_year,cover_i`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`Open Library returned ${r.status}`);
+  const data = await r.json();
+  // Reshape into the same structure Google Books returns, so the rest of the app doesn't care.
+  return (data.docs || []).map((d) => ({
+    id: `ol-${d.key}`,
+    volumeInfo: {
+      title: d.title || "",
+      authors: d.author_name || [],
+      publishedDate: d.first_publish_year ? String(d.first_publish_year) : "",
+      imageLinks: d.cover_i
+        ? {
+            thumbnail: `https://covers.openlibrary.org/b/id/${d.cover_i}-M.jpg`,
+            smallThumbnail: `https://covers.openlibrary.org/b/id/${d.cover_i}-S.jpg`,
+          }
+        : undefined,
+      description: "",
+    },
+  }));
+}
+
+async function searchBooks(query) {
+  let googleWorked = false;
+  try {
+    const items = await fetchGoogleBooks(query);
+    googleWorked = true;
+    if (items.length > 0) return items;
+  } catch {
+    // Google is down or blocked — fall through to Open Library.
+  }
+  try {
+    return await fetchOpenLibrary(query);
+  } catch {
+    if (googleWorked) return [];
+    throw new Error("Both Google Books and Open Library are unreachable right now — try again in a minute.");
+  }
+}
+
+// ---------- Photo search helpers ----------
+const OCR_STOP = new Set(["the", "and", "for", "with", "from", "that", "this", "book", "novel", "series", "author", "new", "york", "times", "bestselling", "bestseller"]);
+const OCR_NOISE = /bestsell|new york times|sunday times|a novel|now a major|netflix|winner of|award|praise|review|isbn|www\.|\.com|\bbook (one|two|three|four|five|\d)\b|#\s?1\b|copies sold|author of/i;
+
+function ocrTokens(s) {
+  return ((s || "").toLowerCase().match(/[a-z0-9]+/g) || []).filter((t) => t.length >= 3 && !OCR_STOP.has(t));
+}
+
+function editDistance(a, b) {
+  const dp = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+  for (let j = 1; j <= b.length; j++) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+  }
+  return dp[a.length][b.length];
+}
+
+// A word counts as present if it's in the OCR text, allowing one OCR slip on longer words.
+function tokenInSet(token, tokens) {
+  for (const t of tokens) {
+    if (t === token) return true;
+    if (token.length >= 5 && Math.abs(t.length - token.length) <= 1 && editDistance(t, token) <= 1) return true;
+  }
+  return false;
+}
+
+// Put the results that best match everything printed on the cover first.
+function rankByOcr(items, ocrText) {
+  const ocr = Array.from(new Set(ocrTokens(ocrText)));
+  const scored = items.map((item) => {
+    const info = item.volumeInfo || {};
+    const t = ocrTokens(info.title);
+    const a = ocrTokens((info.authors || []).join(" "));
+    const tHit = t.length ? t.filter((x) => tokenInSet(x, ocr)).length / t.length : 0;
+    const aHit = a.length ? a.filter((x) => tokenInSet(x, ocr)).length / a.length : 0;
+    return { item, score: tHit * 2 + aHit + (info.imageLinks ? 0.05 : 0) };
+  });
+  scored.sort((x, y) => y.score - x.score);
+  return scored.map((s) => s.item);
+}
+
+// The title is the biggest lettering on a cover; the author is usually the next size down.
+// Review quotes, taglines and "#1 bestseller" banners are small or match the noise list.
+function buildOcrQueries(ocr) {
+  const rankText = ocr?.text || "";
+  const clean = (s) =>
+    String(s || "")
+      .replace(/\s+([,.;:!?])/g, "$1")
+      .replace(/[^A-Za-z0-9'&\-\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const paras = (ocr?.paragraphs || [])
+    .map((p) => ({ ...p, text: clean(p.text) }))
+    .filter((p) => p.size > 0 && p.text.replace(/[^A-Za-z]/g, "").length >= 3 && p.text.length <= 60 && !OCR_NOISE.test(p.text));
+
+  if (paras.length === 0) {
+    const q = clean(rankText.split("\n").slice(0, 2).join(" "));
+    return { queries: q ? [q] : [], rankText };
+  }
+
+  const maxSize = Math.max(...paras.map((p) => p.size));
+  const titleParts = paras.filter((p) => p.size >= maxSize * 0.7).sort((a, b) => a.y - b.y);
+  const authorParts = paras
+    .filter((p) => p.size < maxSize * 0.7 && p.size >= maxSize * 0.3)
+    .sort((a, b) => b.size - a.size)
+    .slice(0, 2);
+
+  const title = titleParts.map((p) => p.text).join(" ");
+  const author = authorParts.map((p) => p.text).join(" ");
+  const queries = [title];
+  if (author) queries.push(`${title} ${author}`);
+  return { queries, rankText };
+}
+
 const PALETTE = {
   bg: "#1b1712",
   panel: "#241f19",
@@ -555,28 +696,47 @@ export default function ReuvensLibrary() {
   }
 
   // ---------- Add a new book ----------
-  async function searchGoogleBooks(overrideQuery) {
-    const q = (typeof overrideQuery === "string" ? overrideQuery : addQuery).trim();
-    if (!q) return;
+  async function runSearch(queries, rankText) {
     setAddSearching(true);
     setAddSearchError("");
     try {
-      const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=8${GOOGLE_BOOKS_API_KEY ? `&key=${GOOGLE_BOOKS_API_KEY}` : ""}`;
-      const r = await fetch(url);
-      const data = await r.json();
-      if (!r.ok) {
-        setAddResults([]);
-        setAddSearchError(data?.error?.message || `Search failed (${r.status}).`);
-      } else {
-        const items = data.items || [];
-        setAddResults(items);
-        if (items.length === 0) setAddSearchError(`No results for "${q}".`);
+      const lists = await Promise.all(queries.map((q) => searchBooks(q)));
+      const seen = new Set();
+      let items = [];
+      for (const list of lists) {
+        for (const it of list) {
+          const key = it.id || `${it.volumeInfo?.title}|${(it.volumeInfo?.authors || []).join(",")}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            items.push(it);
+          }
+        }
       }
-    } catch {
+      if (rankText) items = rankByOcr(items, rankText);
+      items = items.slice(0, 8);
+      setAddResults(items);
+      if (items.length === 0) setAddSearchError(`No results for "${queries[queries.length - 1]}".`);
+    } catch (err) {
       setAddResults([]);
-      setAddSearchError("Search failed — check your connection.");
+      setAddSearchError(err?.message || "Search failed.");
     }
     setAddSearching(false);
+  }
+
+  async function searchGoogleBooks(overrideQuery) {
+    const q = (typeof overrideQuery === "string" ? overrideQuery : addQuery).trim();
+    if (!q) return;
+    await runSearch([q], null);
+  }
+
+  async function searchFromPhoto(ocr) {
+    const { queries, rankText } = buildOcrQueries(ocr);
+    if (queries.length === 0) {
+      setAddSearchError("Couldn't pick a title out of that photo — try a closer, straighter shot of the front cover.");
+      return;
+    }
+    setAddQuery(queries[0]); // show what we read, so it can be corrected and re-searched
+    await runSearch(queries, rankText);
   }
 
   function selectAddResult(item) {
@@ -948,6 +1108,7 @@ export default function ReuvensLibrary() {
           query={addQuery}
           setQuery={setAddQuery}
           onSearch={searchGoogleBooks}
+          onPhotoSearch={searchFromPhoto}
           searching={addSearching}
           searchError={addSearchError}
           results={addResults}
@@ -1293,7 +1454,7 @@ function BookModal({ book, ownerUnlocked, requestMode, requesterName, setRequest
   );
 }
 
-function AddBookModal({ query, setQuery, onSearch, searching, searchError, results, selected, onSelect, onManual, onEdit, draft, setDraft, onConfirm, onBackToSearch, onClose }) {
+function AddBookModal({ query, setQuery, onSearch, onPhotoSearch, searching, searchError, results, selected, onSelect, onManual, onEdit, draft, setDraft, onConfirm, onBackToSearch, onClose }) {
   const [showImages, setShowImages] = useState(false);
   const [imageSearching, setImageSearching] = useState(false);
   const [imageSearchError, setImageSearchError] = useState("");
@@ -1342,9 +1503,7 @@ function AddBookModal({ query, setQuery, onSearch, searching, searchError, resul
       if (!r.ok || !data.text) {
         setImageSearchError(data?.error || "Couldn't read any text from that photo.");
       } else {
-        const q = data.text.split("\n").slice(0, 2).join(" ").trim();
-        setQuery(q);
-        onSearch(q);
+        await onPhotoSearch(data);
       }
     } catch (err) {
       setImageSearchError(err?.message || "Image search failed — check your connection.");
